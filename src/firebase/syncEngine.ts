@@ -166,6 +166,15 @@ async function preserveReadingConflictLocally(params: {
     params.remoteData.updatedAt || new Date().toISOString()
   );
   const remoteCurrentVal = Number(params.remoteData.currentValue);
+  const remoteAppliedTariff = params.remoteData.hasAppliedTariff
+    ? Number(params.remoteData.appliedTariff)
+    : null;
+  const remoteCalculatedAmountBrl = params.remoteData.hasCalculatedAmountBrl
+    ? Number(params.remoteData.calculatedAmountBrl)
+    : null;
+  const remoteAmountUnavailableReason = params.remoteData.amountUnavailableReason
+    ? String(params.remoteData.amountUnavailableReason)
+    : null;
 
   let remotePhoto1Id: string | null = null;
   if (remoteBlob1) {
@@ -188,6 +197,8 @@ async function preserveReadingConflictLocally(params: {
       height: 768,
       auditCode: String(params.remoteData.auditCode1 || ''),
       stampedValue: remoteCurrentVal,
+      stampedTariff: remoteAppliedTariff,
+      stampedAmountBrl: remoteCalculatedAmountBrl,
       capturedAt: remoteUpdatedAt,
     };
     photoStore.put(p1);
@@ -214,6 +225,8 @@ async function preserveReadingConflictLocally(params: {
       height: 768,
       auditCode: String(params.remoteData.auditCode2 || ''),
       stampedValue: remoteCurrentVal,
+      stampedTariff: remoteAppliedTariff,
+      stampedAmountBrl: remoteCalculatedAmountBrl,
       capturedAt: remoteUpdatedAt,
     };
     photoStore.put(p2);
@@ -227,6 +240,9 @@ async function preserveReadingConflictLocally(params: {
     previousValue: params.localReading.previousValue,
     currentValue: params.localReading.currentValue,
     consumption: params.localReading.consumption,
+    appliedTariff: params.localReading.appliedTariff,
+    calculatedAmountBrl: params.localReading.calculatedAmountBrl,
+    amountUnavailableReason: params.localReading.amountUnavailableReason,
     status: params.localReading.status,
     alerts: params.localReading.alerts,
     exceptionType: params.localReading.exceptionType,
@@ -269,6 +285,9 @@ async function preserveReadingConflictLocally(params: {
     consumption: params.remoteData.hasConsumption
       ? Number(params.remoteData.consumption)
       : null,
+    appliedTariff: remoteAppliedTariff,
+    calculatedAmountBrl: remoteCalculatedAmountBrl,
+    amountUnavailableReason: remoteAmountUnavailableReason,
     referenceSource:
       (params.remoteData.referenceSource as 'configured_limits' | 'historical') ||
       'configured_limits',
@@ -334,6 +353,15 @@ async function flushSyncQueueWithoutPreRead(cycleId: string): Promise<{
       );
       if (!localSettings) continue;
 
+      const hasWaterTariff =
+        localSettings.waterTariffPerM3 !== null &&
+        localSettings.waterTariffPerM3 !== undefined &&
+        localSettings.waterTariffPerM3 > 0;
+      const hasGasTariff =
+        localSettings.gasTariffPerM3 !== null &&
+        localSettings.gasTariffPerM3 !== undefined &&
+        localSettings.gasTariffPerM3 > 0;
+
       const path = `cycles/${cycleId}/settings/config`;
       const docRef = doc(db, 'cycles', cycleId, 'settings', 'config');
       const payload = {
@@ -344,6 +372,10 @@ async function flushSyncQueueWithoutPreRead(cycleId: string): Promise<{
         gasAlertLimit: localSettings.gasAlertLimit,
         gasCeilingLimit: localSettings.gasCeilingLimit,
         gasNoiseLimit: localSettings.gasNoiseLimit,
+        waterTariffPerM3: hasWaterTariff ? localSettings.waterTariffPerM3! : -1,
+        hasWaterTariff,
+        gasTariffPerM3: hasGasTariff ? localSettings.gasTariffPerM3! : -1,
+        hasGasTariff,
         physicalOrders: localSettings.physicalOrders || {},
         revision: item.revision,
         revisionToken: localSettings.revisionToken,
@@ -541,6 +573,15 @@ async function flushSyncQueueWithoutPreRead(cycleId: string): Promise<{
       const authorName =
         currentUser.displayName || currentUser.email || 'Leiturista';
 
+      const hasAppliedTariff =
+        localReading.appliedTariff !== null &&
+        localReading.appliedTariff !== undefined &&
+        localReading.appliedTariff > 0;
+      const hasCalculatedAmountBrl =
+        localReading.calculatedAmountBrl !== null &&
+        localReading.calculatedAmountBrl !== undefined &&
+        localReading.calculatedAmountBrl >= 0;
+
       const payload = {
         id: localReading.id,
         condominiumId: CONDOMINIUM_ID,
@@ -555,6 +596,15 @@ async function flushSyncQueueWithoutPreRead(cycleId: string): Promise<{
         consumption:
           localReading.consumption !== null ? localReading.consumption : 0,
         hasConsumption: localReading.consumption !== null,
+        appliedTariff: hasAppliedTariff ? localReading.appliedTariff! : -1,
+        hasAppliedTariff,
+        calculatedAmountBrl: hasCalculatedAmountBrl
+          ? localReading.calculatedAmountBrl!
+          : -1,
+        hasCalculatedAmountBrl,
+        amountUnavailableReason: (
+          localReading.amountUnavailableReason || ''
+        ).slice(0, 120),
         referenceSource: localReading.referenceSource,
         status: localReading.status,
         alerts: localReading.alerts.join(','),
@@ -726,6 +776,20 @@ async function pullCycleDeltasWithCompositeCursor(cycleId: string): Promise<{
         tx.objectStore('settings').get(cycleId)
       );
       const base = currentSettings || settings;
+
+      const waterTariffPerM3 =
+        data.hasWaterTariff === true
+          ? Number(data.waterTariffPerM3)
+          : data.hasWaterTariff === false
+          ? null
+          : base.waterTariffPerM3;
+      const gasTariffPerM3 =
+        data.hasGasTariff === true
+          ? Number(data.gasTariffPerM3)
+          : data.hasGasTariff === false
+          ? null
+          : base.gasTariffPerM3;
+
       const updatedSettings: CycleSettingsRecord = {
         ...base,
         waterAlertLimit: Number(
@@ -739,6 +803,8 @@ async function pullCycleDeltasWithCompositeCursor(cycleId: string): Promise<{
           data.gasCeilingLimit ?? base.gasCeilingLimit
         ),
         gasNoiseLimit: Number(data.gasNoiseLimit ?? base.gasNoiseLimit),
+        waterTariffPerM3,
+        gasTariffPerM3,
         physicalOrders:
           (data.physicalOrders as Record<string, string[]>) ||
           base.physicalOrders,
@@ -837,7 +903,7 @@ async function pullCycleDeltasWithCompositeCursor(cycleId: string): Promise<{
         refStore.put(refRecord);
 
         // If this second device already has a collected reading for this apartment,
-        // preserve its currentValue, observation, photos, and authorship, and recalculate consumption/alerts!
+        // preserve its currentValue, observation, photos, appliedTariff, and authorship, and recalculate consumption/alerts!
         const existingReading = await idbReq<ReadingRecord | undefined>(
           readStore.get(unitId)
         );
@@ -845,17 +911,29 @@ async function pullCycleDeltasWithCompositeCursor(cycleId: string): Promise<{
           existingReading &&
           existingReading.previousValue !== newPrevVal
         ) {
+          const preservedTariff =
+            existingReading.appliedTariff !== undefined &&
+            existingReading.appliedTariff !== null
+              ? existingReading.appliedTariff
+              : service === 'water'
+              ? settings.waterTariffPerM3
+              : settings.gasTariffPerM3;
+
           const reEval = evaluateReading({
             service,
             previousValue: newPrevVal,
             currentValue: existingReading.currentValue,
             limits: settings,
             exceptionType: existingReading.exceptionType,
+            tariffOverridePerM3: preservedTariff,
           });
           readStore.put({
             ...existingReading,
             previousValue: newPrevVal,
             consumption: reEval.consumption,
+            appliedTariff: reEval.appliedTariff,
+            calculatedAmountBrl: reEval.calculatedAmountBrl,
+            amountUnavailableReason: reEval.amountUnavailableReason,
             status: reEval.status,
             alerts: reEval.alerts,
           });
@@ -958,6 +1036,15 @@ async function pullCycleDeltasWithCompositeCursor(cycleId: string): Promise<{
       const apartment = String(data.apartment);
       const updatedAt = String(data.updatedAt || new Date().toISOString());
       const currentVal = Number(data.currentValue);
+      const appliedTariff = data.hasAppliedTariff
+        ? Number(data.appliedTariff)
+        : null;
+      const calculatedAmountBrl = data.hasCalculatedAmountBrl
+        ? Number(data.calculatedAmountBrl)
+        : null;
+      const amountUnavailableReason = data.amountUnavailableReason
+        ? String(data.amountUnavailableReason)
+        : null;
 
       const txWrite = localDb.transaction(['readings', 'photos'], 'readwrite');
       const readStore = txWrite.objectStore('readings');
@@ -984,6 +1071,8 @@ async function pullCycleDeltasWithCompositeCursor(cycleId: string): Promise<{
           height: 768,
           auditCode: String(data.auditCode1 || ''),
           stampedValue: currentVal,
+          stampedTariff: appliedTariff,
+          stampedAmountBrl: calculatedAmountBrl,
           capturedAt: updatedAt,
         } satisfies PhotoRecord);
       }
@@ -1009,6 +1098,8 @@ async function pullCycleDeltasWithCompositeCursor(cycleId: string): Promise<{
           height: 768,
           auditCode: String(data.auditCode2 || ''),
           stampedValue: currentVal,
+          stampedTariff: appliedTariff,
+          stampedAmountBrl: calculatedAmountBrl,
           capturedAt: updatedAt,
         } satisfies PhotoRecord);
       }
@@ -1030,6 +1121,9 @@ async function pullCycleDeltasWithCompositeCursor(cycleId: string): Promise<{
           : null,
         currentValue: currentVal,
         consumption: data.hasConsumption ? Number(data.consumption) : null,
+        appliedTariff,
+        calculatedAmountBrl,
+        amountUnavailableReason,
         referenceSource:
           (data.referenceSource as 'configured_limits' | 'historical') ||
           'configured_limits',

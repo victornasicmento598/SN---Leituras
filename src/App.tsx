@@ -1,9 +1,11 @@
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
 import { RotateCcw } from 'lucide-react';
 import { ApartmentsScreen } from './components/ApartmentsScreen';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import type { ManagementTab } from './components/ManagementScreen';
+import ManagementScreen, {
+  type ManagementTab,
+} from './components/ManagementScreen';
 import { ReadingScreen } from './components/ReadingScreen';
 import { TowersScreen } from './components/TowersScreen';
 import {
@@ -17,6 +19,7 @@ import {
   getSyncQueueForCycle,
 } from './db/indexedDb';
 import {
+  activeFirebaseConfig,
   isFirebaseConfigured,
   signInWithGooglePilot,
   signOutPilot,
@@ -42,10 +45,6 @@ import {
   generateHomologatedPilotCsv,
   parseAndAnalyzeStartingCsv,
 } from './utils/csvEngine';
-
-const LazyManagementScreen = React.lazy(
-  () => import('./components/ManagementScreen')
-);
 
 type ScreenView = 'towers' | 'apartments' | 'reading' | 'management';
 
@@ -126,13 +125,9 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncMessage, setLastSyncMessage] = useState<string | null>(null);
 
-  // Pre-warm lazy modules (Management, PDF, ZIP) for 100% offline readiness
+  // All modules (Field, Management, PDF, ZIP) are bundled at top level for 100% offline readiness
   const prewarmModules = useCallback(async () => {
-    await Promise.all([
-      import('./components/ManagementScreen'),
-      import('./utils/backupZipEngine'),
-      import('./utils/pdfReportEngine'),
-    ]);
+    return Promise.resolve();
   }, []);
 
   const { offlineReady } = useOfflineReadiness(prewarmModules);
@@ -226,8 +221,11 @@ export default function App() {
         currentUser?.email ||
         'Leiturista (Piloto Local)';
 
+  const [authErrorCode, setAuthErrorCode] = useState<string | null>(null);
+
   const handleGoogleLogin = async () => {
     setLastSyncMessage(null);
+    setAuthErrorCode(null);
     try {
       const user = await signInWithGooglePilot();
       setLastSyncMessage(
@@ -236,11 +234,26 @@ export default function App() {
         }). Toque em "Atualizar" para sincronizar.`
       );
     } catch (err) {
-      setLastSyncMessage(
-        err instanceof Error
-          ? `Falha no login Google: ${err.message}`
-          : 'Não foi possível concluir o login Google.'
-      );
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const hostname =
+        typeof window !== 'undefined'
+          ? window.location.hostname
+          : 'sn-leituras.vercel.app';
+      if (rawMsg.includes('auth/unauthorized-domain')) {
+        setAuthErrorCode('auth/unauthorized-domain');
+        setLastSyncMessage(
+          `O domínio "${hostname}" ainda não está autorizado no Firebase Authentication.`
+        );
+      } else if (rawMsg.includes('auth/popup-blocked')) {
+        setAuthErrorCode('auth/popup-blocked');
+        setLastSyncMessage(
+          'O navegador bloqueou a janela pop-up do login Google. Permita pop-ups para este site e tente novamente.'
+        );
+      } else if (rawMsg.includes('auth/popup-closed-by-user')) {
+        setLastSyncMessage('A janela de login Google foi fechada antes de concluir.');
+      } else {
+        setLastSyncMessage(`Falha no login Google: ${rawMsg}`);
+      }
     }
   };
 
@@ -420,6 +433,8 @@ export default function App() {
           totalReferencesForService={activeReferencesMap.size}
           offlineReady={offlineReady}
           firebaseConfigured={isFirebaseConfigured}
+          activeFirebaseProjectId={activeFirebaseConfig.projectId}
+          authErrorCode={authErrorCode}
           currentUser={currentUser}
           onGoogleLogin={handleGoogleLogin}
           onGoogleLogout={handleGoogleLogout}
@@ -508,37 +523,29 @@ export default function App() {
       )}
 
       {view === 'management' && (
-        <Suspense
-          fallback={
-            <div className="min-h-screen bg-[#F4F6F9] flex items-center justify-center p-6 text-sm font-bold text-[#0A2239]">
-              Carregando módulo de Gestão...
-            </div>
-          }
-        >
-          <LazyManagementScreen
-            mode={mode}
-            initialTab={managementTab}
-            initialOrderTower={managementOrderTower}
-            cycleId={cycleId}
-            activeService={activeService}
-            onSelectService={handleSelectService}
-            settings={settings}
-            waterReferences={waterReferences}
-            gasReferences={gasReferences}
-            waterReadings={waterReadings}
-            gasReadings={gasReadings}
-            authorUid={authorUid}
-            authorName={authorName}
-            onBackToField={() => setView('towers')}
-            onOpenReadingFromManagement={(svc, t, apt) => {
-              handleSelectService(svc);
-              setSelectedTower(t);
-              setSelectedApartment(apt);
-              setView('reading');
-            }}
-            onRefreshState={refreshLocalState}
-          />
-        </Suspense>
+        <ManagementScreen
+          mode={mode}
+          initialTab={managementTab}
+          initialOrderTower={managementOrderTower}
+          cycleId={cycleId}
+          activeService={activeService}
+          onSelectService={handleSelectService}
+          settings={settings}
+          waterReferences={waterReferences}
+          gasReferences={gasReferences}
+          waterReadings={waterReadings}
+          gasReadings={gasReadings}
+          authorUid={authorUid}
+          authorName={authorName}
+          onBackToField={() => setView('towers')}
+          onOpenReadingFromManagement={(svc, t, apt) => {
+            handleSelectService(svc);
+            setSelectedTower(t);
+            setSelectedApartment(apt);
+            setView('reading');
+          }}
+          onRefreshState={refreshLocalState}
+        />
       )}
     </ErrorBoundary>
   );

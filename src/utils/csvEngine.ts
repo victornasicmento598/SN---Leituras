@@ -11,7 +11,10 @@ import {
 import {
   evaluateReading,
   formatAlertLabel,
+  formatCurrencyBrl,
   formatDecimal4,
+  formatTariffBrl,
+  getAuditedReadingFinancials,
   parseDecimalInput,
 } from './consumptionEngine';
 
@@ -55,6 +58,8 @@ export interface SavedReadingImpactItem {
   newPreviousValue: number | null;
   oldConsumption: number | null;
   newConsumption: number | null;
+  oldAmountBrl: number | null;
+  newAmountBrl: number | null;
   oldAlerts: AlertCode[];
   newAlerts: AlertCode[];
   oldStatus: 'read' | 'alert';
@@ -231,7 +236,11 @@ export function parseAndAnalyzeStartingCsv(params: {
         ? null
         : parseDecimalInput(trimmedAnterior);
 
-    if (trimmedAnterior !== '' && trimmedAnterior !== '-' && pastPreviousValue === null) {
+    if (
+      trimmedAnterior !== '' &&
+      trimmedAnterior !== '-' &&
+      pastPreviousValue === null
+    ) {
       invalidRows.push({
         lineNumber,
         rawLine,
@@ -246,7 +255,11 @@ export function parseAndAnalyzeStartingCsv(params: {
         ? null
         : parseDecimalInput(trimmedAtual);
 
-    if (trimmedAtual !== '' && trimmedAtual !== '-' && newPreviousValue === null) {
+    if (
+      trimmedAtual !== '' &&
+      trimmedAtual !== '-' &&
+      newPreviousValue === null
+    ) {
       invalidRows.push({
         lineNumber,
         rawLine,
@@ -311,6 +324,7 @@ export function parseAndAnalyzeStartingCsv(params: {
           currentValue: savedReading.currentValue,
           limits,
           exceptionType: savedReading.exceptionType,
+          overrideTariffPerM3: savedReading.appliedTariff,
         });
         const newEval = evaluateReading({
           service,
@@ -318,6 +332,7 @@ export function parseAndAnalyzeStartingCsv(params: {
           currentValue: savedReading.currentValue,
           limits,
           exceptionType: savedReading.exceptionType,
+          overrideTariffPerM3: savedReading.appliedTariff,
         });
         impactedSavedReadings.push({
           unitId,
@@ -328,6 +343,8 @@ export function parseAndAnalyzeStartingCsv(params: {
           newPreviousValue: row.newPreviousValue,
           oldConsumption: oldEval.consumption,
           newConsumption: newEval.consumption,
+          oldAmountBrl: oldEval.calculatedAmountBrl,
+          newAmountBrl: newEval.calculatedAmountBrl,
           oldAlerts: oldEval.alerts,
           newAlerts: newEval.alerts,
           oldStatus: oldEval.status,
@@ -345,6 +362,7 @@ export function parseAndAnalyzeStartingCsv(params: {
           currentValue: savedReading.currentValue,
           limits,
           exceptionType: savedReading.exceptionType,
+          overrideTariffPerM3: savedReading.appliedTariff,
         });
         const newEval = evaluateReading({
           service,
@@ -352,6 +370,7 @@ export function parseAndAnalyzeStartingCsv(params: {
           currentValue: savedReading.currentValue,
           limits,
           exceptionType: savedReading.exceptionType,
+          overrideTariffPerM3: savedReading.appliedTariff,
         });
         impactedSavedReadings.push({
           unitId,
@@ -362,6 +381,8 @@ export function parseAndAnalyzeStartingCsv(params: {
           newPreviousValue: row.newPreviousValue,
           oldConsumption: oldEval.consumption,
           newConsumption: newEval.consumption,
+          oldAmountBrl: oldEval.calculatedAmountBrl,
+          newAmountBrl: newEval.calculatedAmountBrl,
           oldAlerts: oldEval.alerts,
           newAlerts: newEval.alerts,
           oldStatus: oldEval.status,
@@ -462,8 +483,6 @@ export function generateHomologatedPilotCsv(service: ServiceType): string {
     for (let idx = 0; idx < SEQUENTIAL_APARTMENTS.length; idx++) {
       const apt = SEQUENTIAL_APARTMENTS[idx];
       if (service === 'gas' && tower === 1 && apt === '303') {
-        // Explicit homologation case requested by user:
-        // Bloco 1, apto 303, Gás: anterior becomes 266.0070
         rows.push('1;303;265,1200;266,0070');
         continue;
       }
@@ -478,7 +497,6 @@ export function generateHomologatedPilotCsv(service: ServiceType): string {
         continue;
       }
 
-      // Deterministic realistic meter readings with 4 decimal places
       const base =
         service === 'water'
           ? 310 + tower * 7 + idx * 3.125
@@ -492,8 +510,12 @@ export function generateHomologatedPilotCsv(service: ServiceType): string {
   return rows.join('\n');
 }
 
+export const EXPORT_CSV_HEADER =
+  'Ciclo;Servico;Bloco;Apartamento;Anterior;Atual;Consumo;Tarifa_R$_m3;Valor_R$;Motivo_Valor_R$;Status;Alertas;Excecao;Observacao;AutorRegistro;DataRegistro;AutorUltimaEdicao;Sincronizacao;CodigoAuditoriaFoto1;CodigoAuditoriaFoto2';
+
 /**
- * Exports collected readings and references for selected towers/services into CSV format.
+ * Exports collected readings and references for selected towers/services into CSV format,
+ * including the applied tariff (R$/m³), calculated amount in BRL (R$), and unavailability reason.
  */
 export function buildExportCsv(params: {
   cycleId: string;
@@ -501,11 +523,17 @@ export function buildExportCsv(params: {
   towers: number[];
   referencesMap: Map<string, ReferenceRecord>;
   readingsMap: Map<string, ReadingRecord>;
+  fallbackTariffPerM3?: number | null;
 }): string {
-  const { cycleId, service, towers, referencesMap, readingsMap } = params;
-  const lines: string[] = [
-    'Ciclo;Servico;Bloco;Apartamento;Anterior;Atual;Consumo;Status;Alertas;Excecao;Observacao;AutorRegistro;DataRegistro;AutorUltimaEdicao;Sincronizacao;CodigoAuditoriaFoto1;CodigoAuditoriaFoto2',
-  ];
+  const {
+    cycleId,
+    service,
+    towers,
+    referencesMap,
+    readingsMap,
+    fallbackTariffPerM3 = null,
+  } = params;
+  const lines: string[] = [EXPORT_CSV_HEADER];
 
   const serviceLabel = service === 'water' ? 'Agua' : 'Gas';
 
@@ -527,6 +555,27 @@ export function buildExportCsv(params: {
         reading && reading.consumption !== null
           ? formatDecimal4(reading.consumption, true)
           : '';
+
+      let tariffStr = '';
+      let amountBrlStr = '';
+      let amountReasonStr = '';
+
+      if (reading) {
+        const fin = getAuditedReadingFinancials(reading, fallbackTariffPerM3);
+        tariffStr =
+          fin.appliedTariff !== null && fin.appliedTariff > 0
+            ? formatTariffBrl(fin.appliedTariff, false, true)
+            : '';
+        amountBrlStr =
+          fin.calculatedAmountBrl !== null
+            ? formatCurrencyBrl(fin.calculatedAmountBrl, false, true)
+            : '';
+        amountReasonStr =
+          fin.calculatedAmountBrl !== null
+            ? 'Calculado'
+            : fin.amountUnavailableReason || 'Indisponivel';
+      }
+
       const statusStr = reading
         ? reading.status === 'alert'
           ? 'Alerta'
@@ -561,6 +610,9 @@ export function buildExportCsv(params: {
           prevStr,
           currStr,
           consStr,
+          tariffStr,
+          amountBrlStr,
+          amountReasonStr,
           statusStr,
           alertsStr,
           excStr,

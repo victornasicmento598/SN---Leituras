@@ -2,7 +2,7 @@
   "entities": {
     "CycleSettings": {
       "title": "CycleSettings",
-      "description": "Configuracoes globais do ciclo de coleta (limites de alerta e ordens fisicas de gas por torre) do Residencial Campos do Sul.",
+      "description": "Configuracoes globais do ciclo de coleta (limites de alerta, tarifas em R$/m3 de Agua e Gas e ordens fisicas de gas por torre) do Residencial Campos do Sul.",
       "type": "object",
       "properties": {
         "condominiumId": {
@@ -38,6 +38,22 @@
         "gasNoiseLimit": {
           "type": "number",
           "description": "Limite de ruido de consumo de gas em m3 (padrao 0.5)."
+        },
+        "waterTariffPerM3": {
+          "type": "number",
+          "description": "Tarifa de Agua em R$/m3 do ciclo ou -1 quando nao cadastrada."
+        },
+        "hasWaterTariff": {
+          "type": "boolean",
+          "description": "Indica se a tarifa de Agua foi cadastrada no ciclo."
+        },
+        "gasTariffPerM3": {
+          "type": "number",
+          "description": "Tarifa de Gas em R$/m3 do ciclo ou -1 quando nao cadastrada."
+        },
+        "hasGasTariff": {
+          "type": "boolean",
+          "description": "Indica se a tarifa de Gas foi cadastrada no ciclo."
         },
         "physicalOrders": {
           "type": "object",
@@ -91,6 +107,10 @@
         "gasAlertLimit",
         "gasCeilingLimit",
         "gasNoiseLimit",
+        "waterTariffPerM3",
+        "hasWaterTariff",
+        "gasTariffPerM3",
+        "hasGasTariff",
         "physicalOrders",
         "revision",
         "revisionToken",
@@ -188,7 +208,7 @@
     },
     "MeterReading": {
       "title": "MeterReading",
-      "description": "Registro individual de leitura de Agua ou Gas de um apartamento com fotos carimbadas e controle de revisao.",
+      "description": "Registro individual de leitura de Agua ou Gas de um apartamento com tarifa aplicada, valor calculado em R$, fotos carimbadas e controle de revisao.",
       "type": "object",
       "properties": {
         "id": {
@@ -239,6 +259,26 @@
         },
         "hasConsumption": {
           "type": "boolean"
+        },
+        "appliedTariff": {
+          "type": "number",
+          "description": "Tarifa em R$/m3 aplicada na leitura ou -1 quando sem tarifa."
+        },
+        "hasAppliedTariff": {
+          "type": "boolean"
+        },
+        "calculatedAmountBrl": {
+          "type": "number",
+          "description": "Valor calculado em reais (R$) com 2 casas decimais ou -1 quando indisponivel."
+        },
+        "hasCalculatedAmountBrl": {
+          "type": "boolean"
+        },
+        "amountUnavailableReason": {
+          "type": "string",
+          "description": "Motivo quando o valor em R$ esta indisponivel.",
+          "minLength": 0,
+          "maxLength": 120
         },
         "referenceSource": {
           "type": "string",
@@ -351,6 +391,11 @@
         "currentValue",
         "consumption",
         "hasConsumption",
+        "appliedTariff",
+        "hasAppliedTariff",
+        "calculatedAmountBrl",
+        "hasCalculatedAmountBrl",
+        "amountUnavailableReason",
         "referenceSource",
         "status",
         "alerts",
@@ -378,7 +423,7 @@
       "schema": {
         "$ref": "#/entities/CycleSettings"
       },
-      "description": "Configuracoes sincronizadas do ciclo (limites de alerta e ordens fisicas de gas)."
+      "description": "Configuracoes sincronizadas do ciclo (limites de alerta, tarifas em R$/m3 e ordens fisicas de gas)."
     },
     "/cycles/{cycleId}/references/{docId}": {
       "schema": {
@@ -390,7 +435,7 @@
       "schema": {
         "$ref": "#/entities/MeterReading"
       },
-      "description": "Leituras de Agua e Gas sincronizadas com fotos carimbadas e controle estrito de revisao."
+      "description": "Leituras de Agua e Gas sincronizadas com tarifas, valores em R$, fotos carimbadas e controle estrito de revisao."
     }
   }
 }

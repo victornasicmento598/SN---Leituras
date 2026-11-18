@@ -6,12 +6,15 @@
 2. **Integridade de Identidade e Autoria**:
    - Na criação (`create`) de qualquer leitura (`readings`), `createdByUid == request.auth.uid` e `updatedByUid == request.auth.uid`.
    - Na atualização (`update`) de qualquer leitura (`readings`), os campos `createdByUid`, `createdByName`, `createdAt`, `id`, `condominiumId`, `cycleId`, `service`, `tower` e `apartment` são imutáveis (`incoming().field == existing().field`), enquanto `updatedByUid == request.auth.uid`.
-3. **Proteção de Revisão Sem Leitura Prévia**:
+3. **Integridade de Tarifas (`R$/m³`) e Valores Auditados (`R$`)**:
+   - `CycleSettings` valida `waterTariffPerM3` e `gasTariffPerM3` (`>= -1 && <= 10000`) acompanhados das flags booleanas `hasWaterTariff` e `hasGasTariff`.
+   - `MeterReading` valida o snapshot auditado `appliedTariff` (`>= -1 && <= 10000`), `hasAppliedTariff`, `calculatedAmountBrl` (`>= -1 && <= 9999999`), `hasCalculatedAmountBrl` e `amountUnavailableReason` (`size() <= 120`).
+4. **Proteção de Revisão Sem Leitura Prévia**:
    - Criação (`create`): exige `incoming().revision == 1` e `incoming().baseRevisionToken == ""`.
    - Atualização (`update`): exige `incoming().revision == existing().revision + 1`, `incoming().baseRevisionToken == existing().revisionToken` e `incoming().revisionToken != existing().revisionToken`. Isso garante que uma tentativa offline baseada em revisão antiga seja rejeitada pelas regras com `PERMISSION_DENIED`, permitindo ao cliente preservar ambas as versões em conflito.
-4. **Integridade Temporal do Cursor do Servidor**:
+5. **Integridade Temporal do Cursor do Servidor**:
    - Em todas as gravações (`create` e `update`), `incoming().serverUpdatedAt == request.time`. Timestamps arbitrários forjados pelo cliente são rejeitados.
-5. **Proteção de Volume ("Denial of Wallet" & Limite de 1MB do Documento)**:
+6. **Proteção de Volume ("Denial of Wallet" & Limite de 1MB do Documento)**:
    - Todos os campos `string` possuem limite estrito de `.size()`. Cada uma das duas fotos carimbadas (`photo1DataUrl`, `photo2DataUrl`) é limitada a `<= 380000` caracteres (~370 KB cada, totalizando <= 760 KB para ambas com folga para metadados abaixo de 1 MB).
 
 ---

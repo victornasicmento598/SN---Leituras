@@ -124,7 +124,14 @@ export async function getOrInitCycleSettings(
   const store = tx.objectStore('settings');
   const existing = await idbReq<CycleSettingsRecord | undefined>(store.get(cycleId));
   if (existing) {
-    return existing;
+    // Normalize any legacy records so tariffs explicitly start as null unless configured
+    return {
+      ...existing,
+      waterTariffPerM3:
+        existing.waterTariffPerM3 !== undefined ? existing.waterTariffPerM3 : null,
+      gasTariffPerM3:
+        existing.gasTariffPerM3 !== undefined ? existing.gasTariffPerM3 : null,
+    };
   }
 
   const initial: CycleSettingsRecord = {
@@ -360,6 +367,7 @@ export async function getPhotosForReading(
 
 /**
  * Atomically saves a reading, its stamped photos (slot 1 and optional slot 2),
+ * its audited tariff & R$ snapshot (`appliedTariff`, `calculatedAmountBrl`, `amountUnavailableReason`),
  * enqueues the syncQueue item without any pre-read, and deletes the temporary draft.
  */
 export async function saveReadingAtomically(params: {
@@ -373,6 +381,7 @@ export async function saveReadingAtomically(params: {
   exceptionType: ExceptionType;
   observation: string;
   limits: AlertLimitsConfig;
+  tariffOverridePerM3?: number | null;
   photo1: {
     stampedBlob: Blob;
     rawBlob?: Blob;
@@ -408,6 +417,7 @@ export async function saveReadingAtomically(params: {
     currentValue: params.currentValue,
     limits: params.limits,
     exceptionType: params.exceptionType,
+    tariffOverridePerM3: params.tariffOverridePerM3,
   });
 
   const tx = db.transaction(
@@ -481,6 +491,8 @@ export async function saveReadingAtomically(params: {
       height: params.photo1.height,
       auditCode: params.photo1.auditCode,
       stampedValue: params.currentValue,
+      stampedTariff: evaluation.appliedTariff,
+      stampedAmountBrl: evaluation.calculatedAmountBrl,
       capturedAt: params.photo1.capturedAt,
     };
     photosStore.put(p1);
@@ -504,6 +516,8 @@ export async function saveReadingAtomically(params: {
       height: params.photo2.height,
       auditCode: params.photo2.auditCode,
       stampedValue: params.currentValue,
+      stampedTariff: evaluation.appliedTariff,
+      stampedAmountBrl: evaluation.calculatedAmountBrl,
       capturedAt: params.photo2.capturedAt,
     };
     photosStore.put(p2);
@@ -519,6 +533,9 @@ export async function saveReadingAtomically(params: {
     previousValue: params.previousValue,
     currentValue: params.currentValue,
     consumption: evaluation.consumption,
+    appliedTariff: evaluation.appliedTariff,
+    calculatedAmountBrl: evaluation.calculatedAmountBrl,
+    amountUnavailableReason: evaluation.amountUnavailableReason,
     referenceSource: evaluation.referenceSource,
     status: evaluation.status,
     alerts: evaluation.alerts,
@@ -572,7 +589,7 @@ export async function saveReadingAtomically(params: {
  * Applies a validated CSV import or re-import atomically:
  * - Saves all valid reference rows
  * - Preserves existing readings' currentValue, photos, dates, observation, and authorship
- * - Recalculates consumption & alerts for saved readings whose reference changed (when user confirmed)
+ * - Recalculates consumption, alerts, and calculatedAmountBrl for saved readings whose reference changed (when user confirmed)
  * - Enqueues affected towers in syncQueue so the second device receives the CSV import/re-import on 'Atualizar'
  */
 export async function applyCsvImportAtomically(params: {
@@ -653,24 +670,36 @@ export async function applyCsvImportAtomically(params: {
     }
 
     // If a reading already exists on this unit, preserve its value, photos, date, observation, and author,
-    // and recalculate consumption and alert classification with the new reference!
+    // and recalculate consumption, monetary value, and alert classification with the new reference!
     if (
       existingReading &&
       existingReading.previousValue !== row.newPreviousValue &&
       params.applyToImpactedReadings
     ) {
+      const preservedTariff =
+        existingReading.appliedTariff !== undefined &&
+        existingReading.appliedTariff !== null
+          ? existingReading.appliedTariff
+          : params.service === 'water'
+          ? params.limits.waterTariffPerM3
+          : params.limits.gasTariffPerM3;
+
       const newEval = evaluateReading({
         service: params.service,
         previousValue: row.newPreviousValue,
         currentValue: existingReading.currentValue,
         limits: params.limits,
         exceptionType: existingReading.exceptionType,
+        tariffOverridePerM3: preservedTariff,
       });
 
       const updatedReading: ReadingRecord = {
         ...existingReading,
         previousValue: row.newPreviousValue,
         consumption: newEval.consumption,
+        appliedTariff: newEval.appliedTariff,
+        calculatedAmountBrl: newEval.calculatedAmountBrl,
+        amountUnavailableReason: newEval.amountUnavailableReason,
         status: newEval.status,
         alerts: newEval.alerts,
       };
@@ -746,6 +775,239 @@ export async function applyCsvImportAtomically(params: {
     importedCount,
     updatedReadingsCount,
     queuedTowersCount: changedTowers.size,
+  };
+}
+
+/**
+ * Explicitly recalculates already-saved readings of a given service in the cycle
+ * with a newly configured or corrected tariff (`R$/m³`).
+ * By default, saving a tariff in Gestão preserves existing readings' audited snapshot.
+ * Only when the manager explicitly confirms this recalculation action:
+ * - Updates `appliedTariff`, `calculatedAmountBrl`, and `amountUnavailableReason` on saved readings
+ * - Re-stamps their photos (slot 1 and slot 2) from `rawBlob` (if present in IndexedDB) so the
+ *   photo watermark also reflects the corrected tariff and R$ value
+ * - Enqueues the updated readings in `syncQueue` so the partner device receives the updated audit values
+ */
+export async function recalculateSavedReadingsForNewTariff(params: {
+  mode: OperatingMode;
+  cycleId: string;
+  service: ServiceType;
+  newTariffPerM3: number | null;
+  limits: AlertLimitsConfig;
+  authorUid: string;
+  authorName: string;
+}): Promise<{
+  updatedReadingsCount: number;
+  restampedPhotosCount: number;
+  queuedForSyncCount: number;
+}> {
+  const readingsMap = await getReadingsForCycleService(
+    params.mode,
+    params.cycleId,
+    params.service
+  );
+  const readingsList = Array.from(readingsMap.values());
+  if (readingsList.length === 0) {
+    return {
+      updatedReadingsCount: 0,
+      restampedPhotosCount: 0,
+      queuedForSyncCount: 0,
+    };
+  }
+
+  // First re-stamp photos outside the final write transaction (since canvas operations are async)
+  const restampedMap = new Map<
+    string,
+    {
+      photo1?: PhotoRecord;
+      photo2?: PhotoRecord;
+      evaluation: ReturnType<typeof evaluateReading>;
+    }
+  >();
+  let restampedPhotosCount = 0;
+
+  for (const r of readingsList) {
+    const evaluation = evaluateReading({
+      service: r.service,
+      previousValue: r.previousValue,
+      currentValue: r.currentValue,
+      limits: params.limits,
+      exceptionType: r.exceptionType,
+      tariffOverridePerM3: params.newTariffPerM3,
+    });
+
+    const photosMap = await getPhotosForReading(params.mode, r.id);
+    const p1 = photosMap.get('1');
+    const p2 = photosMap.get('2');
+
+    let updatedP1: PhotoRecord | undefined;
+    if (p1) {
+      const sourceBlob = p1.rawBlob || p1.stampedBlob;
+      if (p1.rawBlob) {
+        const stamped1 = await stampMeterPhoto({
+          rawBlob: sourceBlob,
+          cycleId: r.cycleId,
+          tower: r.tower,
+          apartment: r.apartment,
+          service: r.service,
+          currentValue: r.currentValue,
+          previousValue: r.previousValue,
+          consumption: evaluation.consumption,
+          appliedTariff: evaluation.appliedTariff,
+          calculatedAmountBrl: evaluation.calculatedAmountBrl,
+          amountUnavailableReason: evaluation.amountUnavailableReason,
+          slot: 1,
+          capturedAtIso: p1.capturedAt,
+        });
+        updatedP1 = {
+          ...p1,
+          stampedBlob: stamped1.stampedBlob,
+          sizeBytes: stamped1.sizeBytes,
+          width: stamped1.width,
+          height: stamped1.height,
+          stampedTariff: evaluation.appliedTariff,
+          stampedAmountBrl: evaluation.calculatedAmountBrl,
+        };
+        restampedPhotosCount++;
+      } else {
+        updatedP1 = {
+          ...p1,
+          stampedTariff: evaluation.appliedTariff,
+          stampedAmountBrl: evaluation.calculatedAmountBrl,
+        };
+      }
+    }
+
+    let updatedP2: PhotoRecord | undefined;
+    if (p2) {
+      const sourceBlob = p2.rawBlob || p2.stampedBlob;
+      if (p2.rawBlob) {
+        const stamped2 = await stampMeterPhoto({
+          rawBlob: sourceBlob,
+          cycleId: r.cycleId,
+          tower: r.tower,
+          apartment: r.apartment,
+          service: r.service,
+          currentValue: r.currentValue,
+          previousValue: r.previousValue,
+          consumption: evaluation.consumption,
+          appliedTariff: evaluation.appliedTariff,
+          calculatedAmountBrl: evaluation.calculatedAmountBrl,
+          amountUnavailableReason: evaluation.amountUnavailableReason,
+          slot: 2,
+          capturedAtIso: p2.capturedAt,
+        });
+        updatedP2 = {
+          ...p2,
+          stampedBlob: stamped2.stampedBlob,
+          sizeBytes: stamped2.sizeBytes,
+          width: stamped2.width,
+          height: stamped2.height,
+          stampedTariff: evaluation.appliedTariff,
+          stampedAmountBrl: evaluation.calculatedAmountBrl,
+        };
+        restampedPhotosCount++;
+      } else {
+        updatedP2 = {
+          ...p2,
+          stampedTariff: evaluation.appliedTariff,
+          stampedAmountBrl: evaluation.calculatedAmountBrl,
+        };
+      }
+    }
+
+    restampedMap.set(r.id, {
+      photo1: updatedP1,
+      photo2: updatedP2,
+      evaluation,
+    });
+  }
+
+  const db = await openLocalDatabase(params.mode);
+  const tx = db.transaction(['readings', 'photos', 'syncQueue'], 'readwrite');
+  const readStore = tx.objectStore('readings');
+  const photoStore = tx.objectStore('photos');
+  const queueStore = tx.objectStore('syncQueue');
+  const nowIso = new Date().toISOString();
+
+  let updatedReadingsCount = 0;
+  let queuedForSyncCount = 0;
+
+  for (const r of readingsList) {
+    const entry = restampedMap.get(r.id);
+    if (!entry) continue;
+
+    if (entry.photo1) {
+      photoStore.put(entry.photo1);
+    }
+    if (entry.photo2) {
+      photoStore.put(entry.photo2);
+    }
+
+    const queueId = `readings__${r.id}`;
+    const existingQueue = await idbReq<SyncQueueItem | undefined>(
+      queueStore.get(queueId)
+    );
+
+    let expectedOperation: 'create' | 'update' = 'create';
+    let revision = r.revision;
+    let baseRevisionToken = r.baseRevisionToken;
+
+    if (existingQueue) {
+      expectedOperation = existingQueue.expectedOperation;
+      revision = existingQueue.revision;
+      baseRevisionToken = existingQueue.baseRevisionToken;
+    } else if (r.syncStatus === 'synced' || r.serverUpdatedAt) {
+      expectedOperation = 'update';
+      revision = r.revision + 1;
+      baseRevisionToken = r.revisionToken;
+    } else {
+      expectedOperation = 'create';
+      revision = 1;
+      baseRevisionToken = '';
+    }
+
+    const nextRevisionToken = generateRevisionToken(params.authorUid);
+
+    const updatedReading: ReadingRecord = {
+      ...r,
+      appliedTariff: entry.evaluation.appliedTariff,
+      calculatedAmountBrl: entry.evaluation.calculatedAmountBrl,
+      amountUnavailableReason: entry.evaluation.amountUnavailableReason,
+      syncStatus: 'local_only',
+      revision,
+      revisionToken: nextRevisionToken,
+      baseRevisionToken,
+      updatedByUid: params.authorUid || r.updatedByUid,
+      updatedByName: params.authorName || r.updatedByName,
+      updatedAt: nowIso,
+    };
+
+    readStore.put(updatedReading);
+    updatedReadingsCount++;
+
+    if (params.mode === 'real') {
+      const qItem: SyncQueueItem = {
+        id: queueId,
+        targetCollection: 'readings',
+        docId: r.id,
+        cycleId: r.cycleId,
+        expectedOperation,
+        revision,
+        baseRevisionToken,
+        attempts: 0,
+        queuedAt: nowIso,
+      };
+      queueStore.put(qItem);
+      queuedForSyncCount++;
+    }
+  }
+
+  await idbTxDone(tx);
+  return {
+    updatedReadingsCount,
+    restampedPhotosCount,
+    queuedForSyncCount,
   };
 }
 
@@ -832,6 +1094,9 @@ export async function resolveReadingConflict(params: {
     previousValue: candidate.previousValue,
     currentValue: candidate.currentValue,
     consumption: candidate.consumption,
+    appliedTariff: candidate.appliedTariff,
+    calculatedAmountBrl: candidate.calculatedAmountBrl,
+    amountUnavailableReason: candidate.amountUnavailableReason,
     status: candidate.status,
     alerts: candidate.alerts,
     exceptionType: candidate.exceptionType,
@@ -993,6 +1258,13 @@ export async function ensureTrainingDatabaseSeeded(
     { apt: '101', prev: 125.0, curr: 126.42 },
     { apt: '102', prev: 126.45, curr: 127.9 },
   ]) {
+    const evalSample = evaluateReading({
+      service: 'gas',
+      previousValue: sample.prev,
+      currentValue: sample.curr,
+      limits: settings,
+      exceptionType: 'none',
+    });
     const rawBlob = await createSimulatedMeterRawBlob({
       tower: 1,
       apartment: sample.apt,
@@ -1006,6 +1278,11 @@ export async function ensureTrainingDatabaseSeeded(
       apartment: sample.apt,
       service: 'gas',
       currentValue: sample.curr,
+      previousValue: sample.prev,
+      consumption: evalSample.consumption,
+      appliedTariff: evalSample.appliedTariff,
+      calculatedAmountBrl: evalSample.calculatedAmountBrl,
+      amountUnavailableReason: evalSample.amountUnavailableReason,
       slot: 1,
       capturedAtIso: new Date().toISOString(),
     });
@@ -1020,7 +1297,10 @@ export async function ensureTrainingDatabaseSeeded(
       exceptionType: 'none',
       observation: 'Leitura de exemplo do Modo Treinamento',
       limits: settings,
-      photo1: stamped,
+      photo1: {
+        ...stamped,
+        rawBlob,
+      },
       photo2: null,
       authorUid: 'treino_uid',
       authorName: 'Leiturista Treino',

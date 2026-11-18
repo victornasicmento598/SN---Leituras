@@ -21,7 +21,16 @@ import {
   formatTowerCode,
   formatTowerNumber,
 } from '../types/domain';
-import { formatAlertLabel, formatDecimal4 } from '../utils/consumptionEngine';
+import {
+  generateTowerBackupZip,
+  triggerBlobDownload,
+} from '../utils/backupZipEngine';
+import {
+  formatAlertLabel,
+  formatCurrencyBrl,
+  formatDecimal4,
+} from '../utils/consumptionEngine';
+import { generateTowerA4ColorPdfBlob } from '../utils/pdfReportEngine';
 import { ServiceToggleBar } from './ServiceToggleBar';
 
 interface ApartmentsScreenProps {
@@ -64,6 +73,7 @@ export const ApartmentsScreen: React.FC<ApartmentsScreenProps> = ({
   const [authorFilter, setAuthorFilter] = useState<'all' | 'mine'>('all');
   const [isGeneratingZip, setIsGeneratingZip] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [pdfProgressLabel, setPdfProgressLabel] = useState<string | null>(null);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
 
   const hasCustomPhysicalOrder =
@@ -93,9 +103,6 @@ export const ApartmentsScreen: React.FC<ApartmentsScreenProps> = ({
     setIsGeneratingZip(true);
     setBackupMessage(null);
     try {
-      const { generateTowerBackupZip, triggerBlobDownload } = await import(
-        '../utils/backupZipEngine'
-      );
       const res = await generateTowerBackupZip({
         mode,
         cycleId,
@@ -119,22 +126,26 @@ export const ApartmentsScreen: React.FC<ApartmentsScreenProps> = ({
 
   const handleTowerPdfReport = async () => {
     setIsGeneratingPdf(true);
+    setPdfProgressLabel('Iniciando PDF colorido...');
     setBackupMessage(null);
     try {
-      const { generateTowerA4BwPdfBlob } = await import(
-        '../utils/pdfReportEngine'
-      );
-      const { triggerBlobDownload } = await import('../utils/backupZipEngine');
-      const res = await generateTowerA4BwPdfBlob({
+      const res = await generateTowerA4ColorPdfBlob({
         mode,
         cycleId,
         service: activeService,
         tower,
         referencesMap,
         readingsMap,
+        onProgress: (p) => {
+          setPdfProgressLabel(
+            `PDF (${p.currentReadingIndex}/${p.totalReadings} • ${p.embeddedPhotosCount} fotos)`
+          );
+        },
       });
       triggerBlobDownload(res.pdfBlob, res.fileName);
-      setBackupMessage(`Relatório PDF A4 P&B gerado: ${res.fileName}`);
+      setBackupMessage(
+        `Relatório PDF A4 Colorido gerado (${res.embeddedPhotosCount} foto(s) incluída(s)): ${res.fileName}`
+      );
     } catch (err) {
       setBackupMessage(
         err instanceof Error
@@ -143,6 +154,7 @@ export const ApartmentsScreen: React.FC<ApartmentsScreenProps> = ({
       );
     } finally {
       setIsGeneratingPdf(false);
+      setPdfProgressLabel(null);
     }
   };
 
@@ -302,10 +314,14 @@ export const ApartmentsScreen: React.FC<ApartmentsScreenProps> = ({
               type="button"
               onClick={handleTowerPdfReport}
               disabled={isGeneratingPdf}
-              className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-[#0F172A] flex items-center gap-1.5"
+              className="min-h-[38px] px-3 py-1.5 rounded-xl border border-[#0A2239] bg-white hover:bg-slate-50 text-xs font-extrabold text-[#0A2239] flex items-center gap-1.5"
             >
               <FileText className="w-3.5 h-3.5" />
-              <span>{isGeneratingPdf ? 'Gerando PDF...' : 'PDF A4 P&B'}</span>
+              <span>
+                {isGeneratingPdf
+                  ? pdfProgressLabel || 'Gerando PDF...'
+                  : 'PDF A4 Colorido'}
+              </span>
             </button>
           </div>
         </div>
@@ -360,7 +376,7 @@ export const ApartmentsScreen: React.FC<ApartmentsScreenProps> = ({
                   }`}
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="text-2xl font-extrabold font-mono tabular-nums text-[#0F172A]">
                         {apt}
                       </span>
@@ -374,6 +390,18 @@ export const ApartmentsScreen: React.FC<ApartmentsScreenProps> = ({
                               (Δ {formatDecimal4(reading.consumption, true)} m³)
                             </span>
                           )}
+                          {reading.calculatedAmountBrl !== null &&
+                          reading.calculatedAmountBrl !== undefined ? (
+                            <span className="text-emerald-800 font-extrabold">
+                              {' '}
+                              • {formatCurrencyBrl(reading.calculatedAmountBrl)}
+                            </span>
+                          ) : reading.amountUnavailableReason ? (
+                            <span className="text-amber-800 font-sans font-bold">
+                              {' '}
+                              • {reading.amountUnavailableReason}
+                            </span>
+                          ) : null}
                         </span>
                       ) : ref && ref.previousValue !== null ? (
                         <span className="text-xs font-mono tabular-nums font-semibold text-slate-500">

@@ -86,8 +86,8 @@ export function useOnlineStatus(): boolean {
 }
 
 /**
- * Registers the PWA Service Worker (/sw.js) and pre-warms the on-demand modules
- * (Gestão, PDF A4, Backup ZIP) so they are cached and ready for 100% offline use.
+ * Manages PWA Service Worker (/sw.js) and cleans up stale cache versions so
+ * old Service Workers never interfere with module loading.
  */
 export function useOfflineReadiness(
   prewarmLazyModules: () => Promise<void>
@@ -107,11 +107,36 @@ export function useOfflineReadiness(
     async function prepare() {
       setPreparingOffline(true);
       try {
-        if ('serviceWorker' in navigator) {
-          await navigator.serviceWorker
-            .register('/sw.js', { scope: '/' })
-            .catch(() => null);
+        // Clean up any legacy v1/v2 cache buckets immediately
+        if (typeof window !== 'undefined' && 'caches' in window) {
+          const keys = await window.caches.keys().catch(() => [] as string[]);
+          await Promise.all(
+            keys
+              .filter((k) => k !== 'sn-leituras-cache-v3')
+              .map((k) => window.caches.delete(k).catch(() => false))
+          );
         }
+
+        if ('serviceWorker' in navigator) {
+          if (import.meta.env.DEV) {
+            // In Vite dev mode, unregister any previously installed Service Worker
+            // so it never intercepts unbundled /src/* requests
+            const registrations = await navigator.serviceWorker
+              .getRegistrations()
+              .catch(() => []);
+            await Promise.all(
+              registrations.map((reg) => reg.unregister().catch(() => false))
+            );
+          } else {
+            const reg = await navigator.serviceWorker
+              .register('/sw.js', { scope: '/' })
+              .catch(() => null);
+            if (reg) {
+              await reg.update().catch(() => {});
+            }
+          }
+        }
+
         await prewarmLazyModules();
         if (!cancelled) {
           setOfflineReady(true);

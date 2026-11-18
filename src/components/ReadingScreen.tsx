@@ -36,9 +36,16 @@ import {
   formatTowerNumber,
 } from '../types/domain';
 import {
+  generateTowerBackupZip,
+  triggerBlobDownload,
+} from '../utils/backupZipEngine';
+import {
   evaluateReading,
   formatAlertLabel,
+  formatCurrencyBrl,
   formatDecimal4,
+  formatTariffBrl,
+  getAuditedReadingFinancials,
   parseDecimalInput,
 } from '../utils/consumptionEngine';
 import {
@@ -194,6 +201,8 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
             auditCode: draft.auditCode1 || '',
             fileName: `${currentUnitKey}_F1.jpg`,
             stampedValue: draft.stampedValue1 ?? 0,
+            stampedTariff: null,
+            stampedAmountBrl: null,
             capturedAt: draft.capturedAt1 || draft.updatedAt,
             width: 1024,
             height: 768,
@@ -210,6 +219,8 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
             auditCode: draft.auditCode2 || '',
             fileName: `${currentUnitKey}_F2.jpg`,
             stampedValue: draft.stampedValue2 ?? 0,
+            stampedTariff: null,
+            stampedAmountBrl: null,
             capturedAt: draft.capturedAt2 || draft.updatedAt,
             width: 1024,
             height: 768,
@@ -240,6 +251,9 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
             auditCode: p1.auditCode,
             fileName: p1.fileName,
             stampedValue: p1.stampedValue,
+            stampedTariff: p1.stampedTariff ?? existingReading.appliedTariff ?? null,
+            stampedAmountBrl:
+              p1.stampedAmountBrl ?? existingReading.calculatedAmountBrl ?? null,
             capturedAt: p1.capturedAt,
             width: p1.width,
             height: p1.height,
@@ -257,6 +271,9 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
             auditCode: p2.auditCode,
             fileName: p2.fileName,
             stampedValue: p2.stampedValue,
+            stampedTariff: p2.stampedTariff ?? existingReading.appliedTariff ?? null,
+            stampedAmountBrl:
+              p2.stampedAmountBrl ?? existingReading.calculatedAmountBrl ?? null,
             capturedAt: p2.capturedAt,
             width: p2.width,
             height: p2.height,
@@ -303,7 +320,24 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
     [valueInput]
   );
 
-  // Immediate local consumption & alert evaluation on every keystroke!
+  // If editing an already-saved reading whose value has not changed yet, preserve its audited tariff snapshot
+  // unless a new cycle tariff is configured and the reader is actively typing/saving
+  const activeTariffOverride = useMemo(() => {
+    const cycleTariff =
+      service === 'water' ? limits.waterTariffPerM3 : limits.gasTariffPerM3;
+    if (
+      existingReading &&
+      existingReading.currentValue === parsedCurrentValue &&
+      existingReading.exceptionType === exceptionType &&
+      existingReading.appliedTariff !== undefined &&
+      existingReading.appliedTariff !== null
+    ) {
+      return existingReading.appliedTariff;
+    }
+    return cycleTariff;
+  }, [service, limits, existingReading, parsedCurrentValue, exceptionType]);
+
+  // Immediate local consumption, monetary (R$), and alert evaluation on every keystroke!
   const evaluation = useMemo(
     () =>
       evaluateReading({
@@ -312,8 +346,16 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
         currentValue: parsedCurrentValue,
         limits,
         exceptionType,
+        tariffOverridePerM3: activeTariffOverride,
       }),
-    [service, previousValue, parsedCurrentValue, limits, exceptionType]
+    [
+      service,
+      previousValue,
+      parsedCurrentValue,
+      limits,
+      exceptionType,
+      activeTariffOverride,
+    ]
   );
 
   // Persist draft immediately to IndexedDB whenever user types or captures a photo
@@ -372,6 +414,15 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
           ? overrideNumericValue
           : parsedCurrentValue;
 
+      const evalForStamp = evaluateReading({
+        service,
+        previousValue,
+        currentValue: valToStamp,
+        limits,
+        exceptionType,
+        tariffOverridePerM3: activeTariffOverride,
+      });
+
       const stamped = await stampMeterPhoto({
         rawBlob,
         cycleId,
@@ -379,6 +430,11 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
         apartment,
         service,
         currentValue: valToStamp,
+        previousValue,
+        consumption: evalForStamp.consumption,
+        appliedTariff: evalForStamp.appliedTariff,
+        calculatedAmountBrl: evalForStamp.calculatedAmountBrl,
+        amountUnavailableReason: evalForStamp.amountUnavailableReason,
         slot,
         capturedAtIso,
       });
@@ -480,40 +536,6 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
 
     setIsSaving(true);
     try {
-      // If the user corrected the reading value AFTER taking photo1 or photo2,
-      // regenerate the final stamped photo with the exact final value before saving!
-      let finalPhoto1 = photo1;
-      if (photo1.stampedValue !== parsedCurrentValue) {
-        finalPhoto1 = await stampMeterPhoto({
-          rawBlob: photo1.rawBlob || photo1.stampedBlob,
-          cycleId,
-          tower,
-          apartment,
-          service,
-          currentValue: parsedCurrentValue,
-          slot: 1,
-          capturedAtIso: photo1.capturedAt,
-        });
-        if (activeUnitKeyRef.current !== guardUnitKey) return;
-        setPhoto1(finalPhoto1);
-      }
-
-      let finalPhoto2 = photo2;
-      if (photo2 && photo2.stampedValue !== parsedCurrentValue) {
-        finalPhoto2 = await stampMeterPhoto({
-          rawBlob: photo2.rawBlob || photo2.stampedBlob,
-          cycleId,
-          tower,
-          apartment,
-          service,
-          currentValue: parsedCurrentValue,
-          slot: 2,
-          capturedAtIso: photo2.capturedAt,
-        });
-        if (activeUnitKeyRef.current !== guardUnitKey) return;
-        setPhoto2(finalPhoto2);
-      }
-
       // Determine final exceptionType if user confirmed an alert
       let finalExceptionType: ExceptionType = exceptionType;
       if (finalExceptionType === 'none') {
@@ -525,6 +547,68 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
         ) {
           finalExceptionType = 'confirmed_high';
         }
+      }
+
+      const finalEval = evaluateReading({
+        service,
+        previousValue,
+        currentValue: parsedCurrentValue,
+        limits,
+        exceptionType: finalExceptionType,
+        tariffOverridePerM3: activeTariffOverride,
+      });
+
+      // If the user corrected the reading value, exceptionType, or tariff AFTER taking photo1 or photo2,
+      // regenerate the final stamped photo with the exact final reading, tariff, and R$ value before saving!
+      let finalPhoto1 = photo1;
+      if (
+        photo1.stampedValue !== parsedCurrentValue ||
+        photo1.stampedTariff !== finalEval.appliedTariff ||
+        photo1.stampedAmountBrl !== finalEval.calculatedAmountBrl
+      ) {
+        finalPhoto1 = await stampMeterPhoto({
+          rawBlob: photo1.rawBlob || photo1.stampedBlob,
+          cycleId,
+          tower,
+          apartment,
+          service,
+          currentValue: parsedCurrentValue,
+          previousValue,
+          consumption: finalEval.consumption,
+          appliedTariff: finalEval.appliedTariff,
+          calculatedAmountBrl: finalEval.calculatedAmountBrl,
+          amountUnavailableReason: finalEval.amountUnavailableReason,
+          slot: 1,
+          capturedAtIso: photo1.capturedAt,
+        });
+        if (activeUnitKeyRef.current !== guardUnitKey) return;
+        setPhoto1(finalPhoto1);
+      }
+
+      let finalPhoto2 = photo2;
+      if (
+        photo2 &&
+        (photo2.stampedValue !== parsedCurrentValue ||
+          photo2.stampedTariff !== finalEval.appliedTariff ||
+          photo2.stampedAmountBrl !== finalEval.calculatedAmountBrl)
+      ) {
+        finalPhoto2 = await stampMeterPhoto({
+          rawBlob: photo2.rawBlob || photo2.stampedBlob,
+          cycleId,
+          tower,
+          apartment,
+          service,
+          currentValue: parsedCurrentValue,
+          previousValue,
+          consumption: finalEval.consumption,
+          appliedTariff: finalEval.appliedTariff,
+          calculatedAmountBrl: finalEval.calculatedAmountBrl,
+          amountUnavailableReason: finalEval.amountUnavailableReason,
+          slot: 2,
+          capturedAtIso: photo2.capturedAt,
+        });
+        if (activeUnitKeyRef.current !== guardUnitKey) return;
+        setPhoto2(finalPhoto2);
       }
 
       // Atomic IndexedDB write (reading + photos + syncQueue + draft cleanup)
@@ -539,6 +623,7 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
         exceptionType: finalExceptionType,
         observation,
         limits,
+        tariffOverridePerM3: activeTariffOverride,
         photo1: finalPhoto1,
         photo2: finalPhoto2,
         authorUid,
@@ -595,9 +680,6 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
   const handleTowerBackupFromModal = async () => {
     setIsBackingUpTower(true);
     try {
-      const { generateTowerBackupZip, triggerBlobDownload } = await import(
-        '../utils/backupZipEngine'
-      );
       const res = await generateTowerBackupZip({
         mode,
         cycleId,
@@ -610,29 +692,47 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
     }
   };
 
-  // Compute tower summary for the end-of-tower summary modal
+  // Compute tower summary for the end-of-tower summary modal (including total R$)
   const towerSummaryStats = useMemo(() => {
+    const cycleTariff =
+      service === 'water' ? limits.waterTariffPerM3 : limits.gasTariffPerM3;
     let readCount = 0;
     let alertCount = 0;
     let totalConsScaled = 0;
+    let totalAmountCents = 0;
+    let validAmountCount = 0;
+
     for (const apt of orderedApartments) {
       const uId = buildUnitKey(cycleId, service, tower, apt);
-      const r =
-        apt === apartment && parsedCurrentValue !== null
-          ? {
-              status: evaluation.status,
-              consumption: evaluation.consumption,
-              exceptionType,
-            }
-          : allTowerReadings.get(uId);
-      if (r) {
+      if (apt === apartment && parsedCurrentValue !== null) {
         readCount++;
-        if (r.status === 'alert') alertCount++;
+        if (evaluation.status === 'alert') alertCount++;
         if (
-          r.consumption !== null &&
-          r.exceptionType !== 'meter_replaced'
+          evaluation.consumption !== null &&
+          exceptionType !== 'meter_replaced'
         ) {
-          totalConsScaled += Math.round(r.consumption * 10000);
+          totalConsScaled += Math.round(evaluation.consumption * 10000);
+        }
+        if (evaluation.calculatedAmountBrl !== null) {
+          totalAmountCents += Math.round(evaluation.calculatedAmountBrl * 100);
+          validAmountCount++;
+        }
+      } else {
+        const r = allTowerReadings.get(uId);
+        if (r) {
+          readCount++;
+          if (r.status === 'alert') alertCount++;
+          if (
+            r.consumption !== null &&
+            r.exceptionType !== 'meter_replaced'
+          ) {
+            totalConsScaled += Math.round(r.consumption * 10000);
+          }
+          const fin = getAuditedReadingFinancials(r, cycleTariff);
+          if (fin.calculatedAmountBrl !== null) {
+            totalAmountCents += Math.round(fin.calculatedAmountBrl * 100);
+            validAmountCount++;
+          }
         }
       }
     }
@@ -640,6 +740,8 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
       readCount,
       alertCount,
       totalConsumption: totalConsScaled / 10000,
+      totalAmountBrl: validAmountCount > 0 ? totalAmountCents / 100 : null,
+      validAmountCount,
     };
   }, [
     orderedApartments,
@@ -651,6 +753,7 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
     evaluation,
     exceptionType,
     allTowerReadings,
+    limits,
   ]);
 
   return (
@@ -751,6 +854,18 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
                     <strong>
                       {formatDecimal4(existingReading.consumption, true)} m³
                     </strong>
+                    {existingReading.calculatedAmountBrl !== null &&
+                      existingReading.calculatedAmountBrl !== undefined && (
+                        <>
+                          {' '}
+                          •{' '}
+                          <strong>
+                            {formatCurrencyBrl(
+                              existingReading.calculatedAmountBrl
+                            )}
+                          </strong>
+                        </>
+                      )}
                     <br />
                     Autor: <strong>{existingReading.updatedByName}</strong>
                     <br />
@@ -795,6 +910,21 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
                       )}{' '}
                       m³
                     </strong>
+                    {existingReading.conflictCandidate.calculatedAmountBrl !==
+                      null &&
+                      existingReading.conflictCandidate.calculatedAmountBrl !==
+                        undefined && (
+                        <>
+                          {' '}
+                          •{' '}
+                          <strong>
+                            {formatCurrencyBrl(
+                              existingReading.conflictCandidate
+                                .calculatedAmountBrl
+                            )}
+                          </strong>
+                        </>
+                      )}
                     <br />
                     Autor:{' '}
                     <strong>
@@ -841,7 +971,7 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
           </div>
         )}
 
-        {/* Anterior & Consumo Rows matching PNG reference */}
+        {/* Anterior, Consumo (m³) & Valor (R$) Rows matching PNG reference + monetary audit */}
         <div className="space-y-2">
           <div className="rounded-xl bg-[#E2E8F0]/80 px-4 py-3 flex items-center justify-between">
             <span className="text-sm font-bold text-[#0F172A]">Anterior</span>
@@ -877,6 +1007,42 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
                 ? `${formatDecimal4(evaluation.consumption, true)} m³`
                 : '—'}
             </span>
+          </div>
+
+          {/* Live Monetary Calculation (R$) and Applied Tariff (R$/m³) */}
+          <div className="rounded-xl bg-[#E2E8F0]/80 px-4 py-3 flex items-center justify-between gap-2">
+            <div>
+              <span className="text-sm font-bold text-[#0F172A]">
+                Valor Calculado (R$)
+              </span>
+              <span className="block text-[11px] font-semibold text-slate-600">
+                {evaluation.appliedTariff !== null &&
+                evaluation.appliedTariff > 0 ? (
+                  <>
+                    Tarifa aplicada:{' '}
+                    <strong className="font-mono text-[#0A2239]">
+                      {formatTariffBrl(evaluation.appliedTariff)}
+                    </strong>
+                  </>
+                ) : (
+                  <span className="text-amber-900 font-bold">
+                    Sem tarifa configurada na Gestão
+                  </span>
+                )}
+              </span>
+            </div>
+
+            <div className="text-right">
+              {evaluation.calculatedAmountBrl !== null ? (
+                <span className="text-lg font-extrabold font-mono tabular-nums text-emerald-900">
+                  {formatCurrencyBrl(evaluation.calculatedAmountBrl)}
+                </span>
+              ) : (
+                <span className="text-xs font-extrabold text-amber-900 bg-amber-100 border border-amber-300 px-2.5 py-1 rounded-lg inline-block">
+                  {evaluation.amountUnavailableReason || 'Indisponível'}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -953,8 +1119,8 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
             className="w-4 h-4 rounded accent-[#0A2239]"
           />
           <span>
-            Medidor novo ou trocado (exclui consumo distorcido dos totais da
-            torre)
+            Medidor novo ou trocado (exclui consumo e valor R$ distorcido dos
+            totais da torre)
           </span>
         </label>
 
@@ -1094,7 +1260,7 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
               type="button"
               onClick={() => handleSimulateCameraPhoto(1)}
               disabled={isProcessingPhoto}
-              title="Gera imagem simulada do medidor com o valor digitado para teste rápido"
+              title="Gera imagem simulada colorida do medidor com o valor digitado para teste rápido"
               className="min-h-[48px] px-3 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-[#0F172A] font-bold text-xs flex items-center gap-1.5 transition"
             >
               <Sparkles className="w-4 h-4 shrink-0" />
@@ -1118,6 +1284,11 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
                   <span>
                     Torre {formatTowerNumber(tower)} • Apto {apartment} •{' '}
                     {service === 'gas' ? 'Gás' : 'Água'}
+                    {evaluation.calculatedAmountBrl !== null && (
+                      <span className="text-emerald-800 ml-1">
+                        • {formatCurrencyBrl(evaluation.calculatedAmountBrl)}
+                      </span>
+                    )}
                   </span>
                   <span className="font-mono text-[11px] text-slate-600">
                     {photo1.auditCode}
@@ -1407,6 +1578,14 @@ export const ReadingScreen: React.FC<ReadingScreenProps> = ({
                 <span>Consumo total válido da torre:</span>
                 <span className="font-mono">
                   {formatDecimal4(towerSummaryStats.totalConsumption, true)} m³
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Valor total calculado da torre:</span>
+                <span className="font-mono text-emerald-900">
+                  {towerSummaryStats.totalAmountBrl !== null
+                    ? formatCurrencyBrl(towerSummaryStats.totalAmountBrl)
+                    : 'Sem tarifa configurada'}
                 </span>
               </div>
             </div>

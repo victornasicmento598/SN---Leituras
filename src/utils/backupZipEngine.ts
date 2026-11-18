@@ -24,16 +24,18 @@ import {
   formatTowerNumber,
   generateRevisionToken,
 } from '../types/domain';
-import { evaluateReading } from './consumptionEngine';
+import { evaluateReading, getAuditedReadingFinancials } from './consumptionEngine';
 import { buildExportCsv } from './csvEngine';
 
-export const BACKUP_MANIFEST_VERSION = '2.0.0';
+export const BACKUP_MANIFEST_VERSION = '2.1.0';
 
 export interface BackupPhotoLink {
   slot: 1 | 2;
   fileName: string;
   auditCode: string;
   stampedValue: number;
+  stampedTariff?: number | null;
+  stampedAmountBrl?: number | null;
   capturedAt: string;
   sizeBytes: number;
 }
@@ -47,6 +49,9 @@ export interface BackupManifestEntry {
   previousValue: number | null;
   currentValue: number;
   consumption: number | null;
+  appliedTariff?: number | null;
+  calculatedAmountBrl?: number | null;
+  amountUnavailableReason?: string | null;
   referenceSource: 'configured_limits' | 'historical';
   status: 'read' | 'alert';
   alerts: AlertCode[];
@@ -89,9 +94,9 @@ export interface TowerBackupManifest {
 /**
  * Generates a complete local ZIP backup for one or more towers containing:
  * - `manifest.json` (versioned manifest with cycle, unit, service, previous/current readings,
- *   observation, alerts, timestamps, audit codes, and photo file links)
+ *   appliedTariff, calculatedAmountBrl, observation, alerts, timestamps, audit codes, and photo file links)
  * - `photos/*.jpg` (all stamped JPEGs)
- * - `relatorio_conferencia.csv` (conference CSV report)
+ * - `relatorio_conferencia.csv` (conference CSV report with tariff and R$ value)
  */
 export async function generateTowerBackupZip(params: {
   mode: OperatingMode;
@@ -103,6 +108,9 @@ export async function generateTowerBackupZip(params: {
   const zip = new JSZip();
   const photosFolder = zip.folder('photos')!;
 
+  const settings = await getOrInitCycleSettings(mode, cycleId);
+  const fallbackTariffPerM3 =
+    service === 'water' ? settings.waterTariffPerM3 : settings.gasTariffPerM3;
   const referencesMap = await getReferencesForCycleService(mode, cycleId, service);
   const readingsMap = await getReadingsForCycleService(mode, cycleId, service);
 
@@ -126,6 +134,7 @@ export async function generateTowerBackupZip(params: {
       const reading = readingsMap.get(unitId);
       if (!reading) continue;
 
+      const financials = getAuditedReadingFinancials(reading, fallbackTariffPerM3);
       const photosMap = await getPhotosForReading(mode, reading.id);
       const photoLinks: BackupPhotoLink[] = [];
 
@@ -138,6 +147,8 @@ export async function generateTowerBackupZip(params: {
           fileName: `photos/${safeName}`,
           auditCode: p1.auditCode,
           stampedValue: p1.stampedValue,
+          stampedTariff: p1.stampedTariff ?? financials.appliedTariff,
+          stampedAmountBrl: p1.stampedAmountBrl ?? financials.calculatedAmountBrl,
           capturedAt: p1.capturedAt,
           sizeBytes: p1.sizeBytes,
         });
@@ -153,6 +164,8 @@ export async function generateTowerBackupZip(params: {
           fileName: `photos/${safeName}`,
           auditCode: p2.auditCode,
           stampedValue: p2.stampedValue,
+          stampedTariff: p2.stampedTariff ?? financials.appliedTariff,
+          stampedAmountBrl: p2.stampedAmountBrl ?? financials.calculatedAmountBrl,
           capturedAt: p2.capturedAt,
           sizeBytes: p2.sizeBytes,
         });
@@ -168,6 +181,9 @@ export async function generateTowerBackupZip(params: {
         previousValue: reading.previousValue,
         currentValue: reading.currentValue,
         consumption: reading.consumption,
+        appliedTariff: financials.appliedTariff,
+        calculatedAmountBrl: financials.calculatedAmountBrl,
+        amountUnavailableReason: financials.amountUnavailableReason,
         referenceSource: reading.referenceSource,
         status: reading.status,
         alerts: reading.alerts,
@@ -211,6 +227,7 @@ export async function generateTowerBackupZip(params: {
     towers,
     referencesMap,
     readingsMap,
+    fallbackTariffPerM3,
   });
   zip.file('relatorio_conferencia.csv', csvContent);
 
@@ -522,6 +539,26 @@ export async function executeBackupRestoreLocally(params: {
       continue;
     }
 
+    const evalRes = evaluateReading({
+      service: entry.service,
+      previousValue: entry.previousValue,
+      currentValue: entry.currentValue,
+      limits: settings,
+      exceptionType: entry.exceptionType,
+      tariffOverridePerM3: entry.appliedTariff !== undefined ? entry.appliedTariff : undefined,
+    });
+
+    const resolvedAppliedTariff =
+      entry.appliedTariff !== undefined ? entry.appliedTariff : evalRes.appliedTariff;
+    const resolvedCalculatedAmountBrl =
+      entry.calculatedAmountBrl !== undefined
+        ? entry.calculatedAmountBrl
+        : evalRes.calculatedAmountBrl;
+    const resolvedAmountUnavailableReason =
+      entry.amountUnavailableReason !== undefined
+        ? entry.amountUnavailableReason
+        : evalRes.amountUnavailableReason;
+
     if (item.state === 'missing_locally') {
       const blob1 = extractedPhotos.get(`${entry.unitId}_1`) || null;
       const blob2 = extractedPhotos.get(`${entry.unitId}_2`) || null;
@@ -542,6 +579,8 @@ export async function executeBackupRestoreLocally(params: {
           height: 768,
           auditCode: pMeta1?.auditCode || entry.auditCode1,
           stampedValue: entry.currentValue,
+          stampedTariff: pMeta1?.stampedTariff ?? resolvedAppliedTariff,
+          stampedAmountBrl: pMeta1?.stampedAmountBrl ?? resolvedCalculatedAmountBrl,
           capturedAt: pMeta1?.capturedAt || entry.updatedAt,
         };
         photoStore.put(pRec1);
@@ -564,19 +603,13 @@ export async function executeBackupRestoreLocally(params: {
           height: 768,
           auditCode: pMeta2?.auditCode || entry.auditCode2,
           stampedValue: entry.currentValue,
+          stampedTariff: pMeta2?.stampedTariff ?? resolvedAppliedTariff,
+          stampedAmountBrl: pMeta2?.stampedAmountBrl ?? resolvedCalculatedAmountBrl,
           capturedAt: pMeta2?.capturedAt || entry.updatedAt,
         };
         photoStore.put(pRec2);
         restoredPhotosCount++;
       }
-
-      const evalRes = evaluateReading({
-        service: entry.service,
-        previousValue: entry.previousValue,
-        currentValue: entry.currentValue,
-        limits: settings,
-        exceptionType: entry.exceptionType,
-      });
 
       const revToken = entry.revisionToken || generateRevisionToken(entry.updatedByUid);
 
@@ -590,6 +623,9 @@ export async function executeBackupRestoreLocally(params: {
         previousValue: entry.previousValue,
         currentValue: entry.currentValue,
         consumption: evalRes.consumption,
+        appliedTariff: resolvedAppliedTariff,
+        calculatedAmountBrl: resolvedCalculatedAmountBrl,
+        amountUnavailableReason: resolvedAmountUnavailableReason,
         referenceSource: evalRes.referenceSource,
         status: evalRes.status,
         alerts: evalRes.alerts,
@@ -654,6 +690,8 @@ export async function executeBackupRestoreLocally(params: {
           height: 768,
           auditCode: pMeta1?.auditCode || entry.auditCode1,
           stampedValue: entry.currentValue,
+          stampedTariff: pMeta1?.stampedTariff ?? resolvedAppliedTariff,
+          stampedAmountBrl: pMeta1?.stampedAmountBrl ?? resolvedCalculatedAmountBrl,
           capturedAt: pMeta1?.capturedAt || entry.updatedAt,
         } satisfies PhotoRecord);
         restoredPhotosCount++;
@@ -675,6 +713,8 @@ export async function executeBackupRestoreLocally(params: {
           height: 768,
           auditCode: pMeta2?.auditCode || entry.auditCode2,
           stampedValue: entry.currentValue,
+          stampedTariff: pMeta2?.stampedTariff ?? resolvedAppliedTariff,
+          stampedAmountBrl: pMeta2?.stampedAmountBrl ?? resolvedCalculatedAmountBrl,
           capturedAt: pMeta2?.capturedAt || entry.updatedAt,
         } satisfies PhotoRecord);
         restoredPhotosCount++;
@@ -685,6 +725,9 @@ export async function executeBackupRestoreLocally(params: {
         previousValue: entry.previousValue,
         currentValue: entry.currentValue,
         consumption: entry.consumption,
+        appliedTariff: resolvedAppliedTariff,
+        calculatedAmountBrl: resolvedCalculatedAmountBrl,
+        amountUnavailableReason: resolvedAmountUnavailableReason,
         status: entry.status,
         alerts: entry.alerts,
         exceptionType: entry.exceptionType,

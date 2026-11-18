@@ -44,6 +44,8 @@ interface TowersScreenProps {
   totalReferencesForService: number;
   offlineReady: boolean;
   firebaseConfigured: boolean;
+  activeFirebaseProjectId?: string;
+  authErrorCode?: string | null;
   currentUser: User | null;
   onGoogleLogin: () => Promise<void>;
   onGoogleLogout: () => Promise<void>;
@@ -69,6 +71,8 @@ export const TowersScreen: React.FC<TowersScreenProps> = ({
   totalReferencesForService,
   offlineReady,
   firebaseConfigured,
+  activeFirebaseProjectId,
+  authErrorCode,
   currentUser,
   onGoogleLogin,
   onGoogleLogout,
@@ -80,6 +84,7 @@ export const TowersScreen: React.FC<TowersScreenProps> = ({
   onQuickLoadHomologatedCsv,
 }) => {
   const [copiedUid, setCopiedUid] = useState(false);
+  const [copiedDomain, setCopiedDomain] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [loadingQuickCsv, setLoadingQuickCsv] = useState(false);
 
@@ -437,8 +442,85 @@ export const TowersScreen: React.FC<TowersScreenProps> = ({
           )}
 
           {lastSyncMessage && (
-            <div className="rounded-xl bg-slate-100 border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-800">
-              {lastSyncMessage}
+            <div className="rounded-xl bg-slate-100 border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-800 space-y-2">
+              <p>{lastSyncMessage}</p>
+
+              {authErrorCode === 'auth/unauthorized-domain' && (
+                <div className="rounded-lg bg-amber-50 border border-amber-400 p-3 text-[#0F172A] space-y-2">
+                  <p className="font-extrabold text-amber-950">
+                    Como liberar o login Google neste domínio ({typeof window !== 'undefined' ? window.location.hostname : 'sn-leituras.vercel.app'}):
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 text-xs text-slate-800">
+                    <li>
+                      No Console do Firebase do projeto ativo (
+                      <code className="bg-white px-1.5 py-0.5 rounded border border-slate-300 font-mono font-bold">
+                        {activeFirebaseProjectId || 'projeto-piloto'}
+                      </code>
+                      ), abra{' '}
+                      <strong>
+                        Authentication → Settings (Configurações) → Authorized domains (Domínios autorizados)
+                      </strong>
+                      .
+                    </li>
+                    <li>
+                      Clique em <strong>Add domain (Adicionar domínio)</strong>, cole{' '}
+                      <code className="bg-white px-1.5 py-0.5 rounded border border-slate-300 font-mono font-bold">
+                        {typeof window !== 'undefined' ? window.location.hostname : 'sn-leituras.vercel.app'}
+                      </code>{' '}
+                      e salve.
+                    </li>
+                    <li>
+                      <em>Nota:</em> Se você criou um projeto Firebase separado para o piloto (diferente de{' '}
+                      <code>{activeFirebaseProjectId}</code>), configure as variáveis{' '}
+                      <code>VITE_FIREBASE_*</code> na Vercel em{' '}
+                      <strong>Project Settings → Environment Variables</strong> e faça um Redeploy.
+                    </li>
+                  </ol>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const domain =
+                          typeof window !== 'undefined'
+                            ? window.location.hostname
+                            : 'sn-leituras.vercel.app';
+                        try {
+                          await navigator.clipboard.writeText(domain);
+                          setCopiedDomain(true);
+                          setTimeout(() => setCopiedDomain(false), 2500);
+                        } catch {
+                          // ignore
+                        }
+                      }}
+                      className="min-h-[36px] px-3 py-1.5 rounded-lg bg-[#0A2239] text-white font-bold text-xs flex items-center gap-1.5"
+                    >
+                      {copiedDomain ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-300" />
+                          <span>Domínio copiado!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>
+                            Copiar domínio ({typeof window !== 'undefined' ? window.location.hostname : 'sn-leituras.vercel.app'})
+                          </span>
+                        </>
+                      )}
+                    </button>
+                    {activeFirebaseProjectId && (
+                      <a
+                        href={`https://console.firebase.google.com/project/${activeFirebaseProjectId}/authentication/settings`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="min-h-[36px] px-3 py-1.5 rounded-lg bg-[#E08E00] text-[#0F172A] font-extrabold text-xs inline-flex items-center"
+                      >
+                        Abrir Domínios Autorizados no Firebase Console ↗
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>

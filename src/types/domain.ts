@@ -36,11 +36,13 @@ export interface CycleCursors {
 }
 
 export interface AlertLimitsConfig {
-  waterAlertLimit: number;    // default 22 m³
-  waterCeilingLimit: number;  // default 100 m³
-  gasAlertLimit: number;      // default 15 m³
-  gasCeilingLimit: number;    // default 50 m³
-  gasNoiseLimit: number;      // default 0.5 m³
+  waterAlertLimit: number;          // default 22 m³
+  waterCeilingLimit: number;        // default 100 m³
+  gasAlertLimit: number;            // default 15 m³
+  gasCeilingLimit: number;          // default 50 m³
+  gasNoiseLimit: number;            // default 0.5 m³
+  waterTariffPerM3: number | null;  // starts null in a new cycle (requires configuration in Gestão)
+  gasTariffPerM3: number | null;    // starts null in a new cycle (requires configuration in Gestão)
 }
 
 export interface CycleSettingsRecord extends AlertLimitsConfig {
@@ -94,6 +96,9 @@ export interface ConflictReadingVersion {
   previousValue: number | null;
   currentValue: number;
   consumption: number | null;
+  appliedTariff: number | null;
+  calculatedAmountBrl: number | null;
+  amountUnavailableReason: string | null;
   status: 'read' | 'alert';
   alerts: AlertCode[];
   exceptionType: ExceptionType;
@@ -123,6 +128,12 @@ export interface ReadingRecord {
   previousValue: number | null;
   currentValue: number;
   consumption: number | null;
+  /** Audited snapshot of the tariff (R$/m³) applied when the reading was saved/recalculated */
+  appliedTariff: number | null;
+  /** Audited snapshot of the calculated monetary amount in BRL (R$) rounded to 2 decimal places */
+  calculatedAmountBrl: number | null;
+  /** Explicit reason when calculatedAmountBrl is null (e.g. "Sem tarifa configurada", "Sem leitura anterior", "Troca de medidor (consumo excluído)", "Consumo negativo (em revisão)") */
+  amountUnavailableReason: string | null;
   referenceSource: ReferenceSourceType;
   status: 'read' | 'alert';
   alerts: AlertCode[];
@@ -162,6 +173,8 @@ export interface PhotoRecord {
   height: number;
   auditCode: string;
   stampedValue: number;
+  stampedTariff?: number | null;
+  stampedAmountBrl?: number | null;
   capturedAt: string;
 }
 
@@ -231,6 +244,8 @@ export const DEFAULT_ALERT_LIMITS: AlertLimitsConfig = {
   gasAlertLimit: 15,
   gasCeilingLimit: 50,
   gasNoiseLimit: 0.5,
+  waterTariffPerM3: null,
+  gasTariffPerM3: null,
 };
 
 export function formatTowerCode(tower: number): string {

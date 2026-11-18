@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sn-leituras-cache-v2';
+const CACHE_NAME = 'sn-leituras-cache-v3';
 const CORE_ASSETS = [
   '/',
   '/index.html',
@@ -54,22 +54,37 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Same-origin assets & chunks: Cache-First with network fallback & update
+  // Never intercept Vite dev-server unbundled module transforms
+  if (
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.startsWith('/@')
+  ) {
+    return;
+  }
+
+  // Same-origin production assets & app shell: Network-First with offline Cache fallback
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(request).then((cachedResponse) => {
-        const fetchPromise = fetch(request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              const clone = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+      fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return networkResponse;
+        })
+        .catch(() =>
+          caches.match(request).then((cachedResponse) => {
+            if (cachedResponse) {
+              return cachedResponse;
             }
-            return networkResponse;
+            if (request.mode === 'navigate') {
+              return caches.match('/index.html');
+            }
+            return Response.error();
           })
-          .catch(() => cachedResponse);
-
-        return cachedResponse || fetchPromise;
-      })
+        )
     );
   }
 });

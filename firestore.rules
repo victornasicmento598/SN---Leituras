@@ -25,25 +25,28 @@ service cloud.firestore {
     }
 
     // Lista fixa de dois UIDs autorizados para coleta em dupla no Residencial Campos do Sul.
-    // Substitua 'UID_LEITURISTA_1' e 'UID_LEITURISTA_2' pelos dois UIDs reais do painel Firebase Authentication.
+    // 1º Leiturista: Gs87xj1DKRg0RrnOXVnCuZAEeW63 (nascifeupa@gmail.com)
+    // Substitua 'UID_LEITURISTA_2' pelo UID do segundo aparelho no painel Firebase Authentication.
     function isAuthorizedReader() {
       return isSignedIn()
         && request.auth.token.email_verified == true
-        && (request.auth.uid in ['UID_LEITURISTA_1', 'UID_LEITURISTA_2']);
+        && (request.auth.uid in ['Gs87xj1DKRg0RrnOXVnCuZAEeW63', 'UID_LEITURISTA_2']);
     }
 
     // 3. Validation Blueprints
     function isValidCycleSettings(data) {
       return data.keys().hasAll([
           'condominiumId', 'cycleId', 'waterAlertLimit', 'waterCeilingLimit',
-          'gasAlertLimit', 'gasCeilingLimit', 'gasNoiseLimit', 'physicalOrders',
-          'revision', 'revisionToken', 'baseRevisionToken',
+          'gasAlertLimit', 'gasCeilingLimit', 'gasNoiseLimit',
+          'waterTariffPerM3', 'hasWaterTariff', 'gasTariffPerM3', 'hasGasTariff',
+          'physicalOrders', 'revision', 'revisionToken', 'baseRevisionToken',
           'updatedByUid', 'updatedByName', 'updatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
           'condominiumId', 'cycleId', 'waterAlertLimit', 'waterCeilingLimit',
-          'gasAlertLimit', 'gasCeilingLimit', 'gasNoiseLimit', 'physicalOrders',
-          'revision', 'revisionToken', 'baseRevisionToken',
+          'gasAlertLimit', 'gasCeilingLimit', 'gasNoiseLimit',
+          'waterTariffPerM3', 'hasWaterTariff', 'gasTariffPerM3', 'hasGasTariff',
+          'physicalOrders', 'revision', 'revisionToken', 'baseRevisionToken',
           'updatedByUid', 'updatedByName', 'updatedAt', 'serverUpdatedAt'
         ])
         && data.condominiumId is string && data.condominiumId == 'campos-do-sul' && data.condominiumId.size() == 13
@@ -53,6 +56,10 @@ service cloud.firestore {
         && data.gasAlertLimit is number && data.gasAlertLimit > 0 && data.gasAlertLimit <= 1000
         && data.gasCeilingLimit is number && data.gasCeilingLimit >= data.gasAlertLimit && data.gasCeilingLimit <= 10000
         && data.gasNoiseLimit is number && data.gasNoiseLimit >= 0 && data.gasNoiseLimit <= 50
+        && data.waterTariffPerM3 is number && data.waterTariffPerM3 >= -1 && data.waterTariffPerM3 <= 10000
+        && data.hasWaterTariff is bool
+        && data.gasTariffPerM3 is number && data.gasTariffPerM3 >= -1 && data.gasTariffPerM3 <= 10000
+        && data.hasGasTariff is bool
         && data.physicalOrders is map && data.physicalOrders.size() <= 28
         && data.revision is int && data.revision >= 1
         && data.revisionToken is string && data.revisionToken.size() >= 8 && data.revisionToken.size() <= 64
@@ -95,6 +102,7 @@ service cloud.firestore {
       return data.keys().hasAll([
           'id', 'condominiumId', 'cycleId', 'service', 'tower', 'apartment',
           'previousValue', 'hasPreviousValue', 'currentValue', 'consumption', 'hasConsumption',
+          'appliedTariff', 'hasAppliedTariff', 'calculatedAmountBrl', 'hasCalculatedAmountBrl', 'amountUnavailableReason',
           'referenceSource', 'status', 'alerts', 'exceptionType', 'observation',
           'auditCode1', 'auditCode2', 'photo1DataUrl', 'photo2DataUrl',
           'revision', 'revisionToken', 'baseRevisionToken',
@@ -104,6 +112,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'condominiumId', 'cycleId', 'service', 'tower', 'apartment',
           'previousValue', 'hasPreviousValue', 'currentValue', 'consumption', 'hasConsumption',
+          'appliedTariff', 'hasAppliedTariff', 'calculatedAmountBrl', 'hasCalculatedAmountBrl', 'amountUnavailableReason',
           'referenceSource', 'status', 'alerts', 'exceptionType', 'observation',
           'auditCode1', 'auditCode2', 'photo1DataUrl', 'photo2DataUrl',
           'revision', 'revisionToken', 'baseRevisionToken',
@@ -121,6 +130,11 @@ service cloud.firestore {
         && data.currentValue is number && data.currentValue >= 0 && data.currentValue <= 9999999
         && data.consumption is number && data.consumption >= -9999999 && data.consumption <= 9999999
         && data.hasConsumption is bool
+        && data.appliedTariff is number && data.appliedTariff >= -1 && data.appliedTariff <= 10000
+        && data.hasAppliedTariff is bool
+        && data.calculatedAmountBrl is number && data.calculatedAmountBrl >= -1 && data.calculatedAmountBrl <= 9999999
+        && data.hasCalculatedAmountBrl is bool
+        && data.amountUnavailableReason is string && data.amountUnavailableReason.size() <= 120
         && data.referenceSource is string && (data.referenceSource == 'configured_limits' || data.referenceSource == 'historical') && data.referenceSource.size() <= 20
         && data.status is string && (data.status == 'read' || data.status == 'alert') && data.status.size() <= 10
         && data.alerts is string && data.alerts.size() <= 160
@@ -146,7 +160,7 @@ service cloud.firestore {
     // 4. Collection Rules: Cycle Settings
     match /cycles/{cycleId}/settings/{docId} {
       allow get: if isAuthorizedReader() && isValidId(cycleId) && isValidId(docId);
-      allow list: if isAuthorizedReader() && existing().condominiumId == 'campos-do-sul' && existing().revision >= 1;
+      allow list: if isAuthorizedReader();
       allow create: if isAuthorizedReader()
         && isValidId(cycleId)
         && isValidId(docId)
@@ -165,7 +179,8 @@ service cloud.firestore {
         && incoming().revisionToken != existing().revisionToken
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'waterAlertLimit', 'waterCeilingLimit', 'gasAlertLimit', 'gasCeilingLimit',
-          'gasNoiseLimit', 'physicalOrders', 'revision', 'revisionToken', 'baseRevisionToken',
+          'gasNoiseLimit', 'waterTariffPerM3', 'hasWaterTariff', 'gasTariffPerM3', 'hasGasTariff',
+          'physicalOrders', 'revision', 'revisionToken', 'baseRevisionToken',
           'updatedByUid', 'updatedByName', 'updatedAt', 'serverUpdatedAt'
         ]);
       allow delete: if false;
@@ -174,7 +189,7 @@ service cloud.firestore {
     // 5. Collection Rules: Tower References (CSV Imports & Re-imports)
     match /cycles/{cycleId}/references/{docId} {
       allow get: if isAuthorizedReader() && isValidId(cycleId) && isValidId(docId);
-      allow list: if isAuthorizedReader() && existing().condominiumId == 'campos-do-sul' && existing().revision >= 1;
+      allow list: if isAuthorizedReader();
       allow create: if isAuthorizedReader()
         && isValidId(cycleId)
         && isValidId(docId)
@@ -203,7 +218,7 @@ service cloud.firestore {
     // 6. Collection Rules: Meter Readings (Água & Gás)
     match /cycles/{cycleId}/readings/{docId} {
       allow get: if isAuthorizedReader() && isValidId(cycleId) && isValidId(docId);
-      allow list: if isAuthorizedReader() && existing().condominiumId == 'campos-do-sul' && existing().revision >= 1;
+      allow list: if isAuthorizedReader();
       allow create: if isAuthorizedReader()
         && isValidId(cycleId)
         && isValidId(docId)
@@ -231,6 +246,7 @@ service cloud.firestore {
         && incoming().revisionToken != existing().revisionToken
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'previousValue', 'hasPreviousValue', 'currentValue', 'consumption', 'hasConsumption',
+          'appliedTariff', 'hasAppliedTariff', 'calculatedAmountBrl', 'hasCalculatedAmountBrl', 'amountUnavailableReason',
           'referenceSource', 'status', 'alerts', 'exceptionType', 'observation',
           'auditCode1', 'auditCode2', 'photo1DataUrl', 'photo2DataUrl',
           'revision', 'revisionToken', 'baseRevisionToken',
