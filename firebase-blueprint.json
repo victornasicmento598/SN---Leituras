@@ -1,0 +1,396 @@
+{
+  "entities": {
+    "CycleSettings": {
+      "title": "CycleSettings",
+      "description": "Configuracoes globais do ciclo de coleta (limites de alerta e ordens fisicas de gas por torre) do Residencial Campos do Sul.",
+      "type": "object",
+      "properties": {
+        "condominiumId": {
+          "type": "string",
+          "description": "Identificador fixo do condominio.",
+          "enum": ["campos-do-sul"],
+          "minLength": 13,
+          "maxLength": 13
+        },
+        "cycleId": {
+          "type": "string",
+          "description": "Identificador do ciclo no formato YYYY-MM.",
+          "pattern": "^[0-9]{4}-[0-9]{2}$",
+          "minLength": 7,
+          "maxLength": 7
+        },
+        "waterAlertLimit": {
+          "type": "number",
+          "description": "Limite de alerta de consumo de agua em m3 (padrao 22)."
+        },
+        "waterCeilingLimit": {
+          "type": "number",
+          "description": "Teto critico de consumo de agua em m3 (padrao 100)."
+        },
+        "gasAlertLimit": {
+          "type": "number",
+          "description": "Limite de alerta de consumo de gas em m3 (padrao 15)."
+        },
+        "gasCeilingLimit": {
+          "type": "number",
+          "description": "Teto critico de consumo de gas em m3 (padrao 50)."
+        },
+        "gasNoiseLimit": {
+          "type": "number",
+          "description": "Limite de ruido de consumo de gas em m3 (padrao 0.5)."
+        },
+        "physicalOrders": {
+          "type": "object",
+          "description": "Mapa de ordens fisicas de coleta de gas por torre (chaves T01 a T28)."
+        },
+        "revision": {
+          "type": "number",
+          "description": "Contador sequencial de revisao para sincronizacao."
+        },
+        "revisionToken": {
+          "type": "string",
+          "description": "Token unico da revisao atual.",
+          "minLength": 8,
+          "maxLength": 64
+        },
+        "baseRevisionToken": {
+          "type": "string",
+          "description": "Token da revisao anterior que originou a alteracao.",
+          "minLength": 0,
+          "maxLength": 64
+        },
+        "updatedByUid": {
+          "type": "string",
+          "description": "UID do leiturista autenticado que atualizou a configuracao.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedByName": {
+          "type": "string",
+          "description": "Nome de exibicao do leiturista que atualizou a configuracao.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Data/hora ISO local da alteracao.",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "serverUpdatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp oficial do servidor Firestore para cursor incremental."
+        }
+      },
+      "required": [
+        "condominiumId",
+        "cycleId",
+        "waterAlertLimit",
+        "waterCeilingLimit",
+        "gasAlertLimit",
+        "gasCeilingLimit",
+        "gasNoiseLimit",
+        "physicalOrders",
+        "revision",
+        "revisionToken",
+        "baseRevisionToken",
+        "updatedByUid",
+        "updatedByName",
+        "updatedAt",
+        "serverUpdatedAt"
+      ]
+    },
+    "TowerReference": {
+      "title": "TowerReference",
+      "description": "Lote de leituras anteriores (referencias importadas via CSV) por torre e servico.",
+      "type": "object",
+      "properties": {
+        "condominiumId": {
+          "type": "string",
+          "enum": ["campos-do-sul"],
+          "minLength": 13,
+          "maxLength": 13
+        },
+        "cycleId": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}$",
+          "minLength": 7,
+          "maxLength": 7
+        },
+        "service": {
+          "type": "string",
+          "enum": ["water", "gas"],
+          "minLength": 3,
+          "maxLength": 5
+        },
+        "tower": {
+          "type": "number",
+          "description": "Numero da torre (1 a 28)."
+        },
+        "apartments": {
+          "type": "object",
+          "description": "Mapa de apartamento (101..504) para valor anterior numerico ou null."
+        },
+        "sourceFile": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "revision": {
+          "type": "number"
+        },
+        "revisionToken": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 64
+        },
+        "baseRevisionToken": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64
+        },
+        "importedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "importedByName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "importedAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "serverUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "condominiumId",
+        "cycleId",
+        "service",
+        "tower",
+        "apartments",
+        "sourceFile",
+        "revision",
+        "revisionToken",
+        "baseRevisionToken",
+        "importedByUid",
+        "importedByName",
+        "importedAt",
+        "serverUpdatedAt"
+      ]
+    },
+    "MeterReading": {
+      "title": "MeterReading",
+      "description": "Registro individual de leitura de Agua ou Gas de um apartamento com fotos carimbadas e controle de revisao.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 10,
+          "maxLength": 64
+        },
+        "condominiumId": {
+          "type": "string",
+          "enum": ["campos-do-sul"],
+          "minLength": 13,
+          "maxLength": 13
+        },
+        "cycleId": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}$",
+          "minLength": 7,
+          "maxLength": 7
+        },
+        "service": {
+          "type": "string",
+          "enum": ["water", "gas"],
+          "minLength": 3,
+          "maxLength": 5
+        },
+        "tower": {
+          "type": "number"
+        },
+        "apartment": {
+          "type": "string",
+          "pattern": "^[1-5]0[1-4]$",
+          "minLength": 3,
+          "maxLength": 3
+        },
+        "previousValue": {
+          "type": "number",
+          "description": "Valor anterior em m3 ou -1 quando ausente."
+        },
+        "hasPreviousValue": {
+          "type": "boolean"
+        },
+        "currentValue": {
+          "type": "number"
+        },
+        "consumption": {
+          "type": "number"
+        },
+        "hasConsumption": {
+          "type": "boolean"
+        },
+        "referenceSource": {
+          "type": "string",
+          "enum": ["configured_limits", "historical"],
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "status": {
+          "type": "string",
+          "enum": ["read", "alert"],
+          "minLength": 4,
+          "maxLength": 10
+        },
+        "alerts": {
+          "type": "string",
+          "description": "Lista compacta de codigos de alerta separados por virgula.",
+          "minLength": 0,
+          "maxLength": 160
+        },
+        "exceptionType": {
+          "type": "string",
+          "enum": ["none", "confirmed_high", "confirmed_negative", "meter_replaced"],
+          "minLength": 4,
+          "maxLength": 24
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "auditCode1": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64
+        },
+        "auditCode2": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64
+        },
+        "photo1DataUrl": {
+          "type": "string",
+          "description": "JPEG carimbado 1 em data URL com limite de tamanho.",
+          "minLength": 0,
+          "maxLength": 380000
+        },
+        "photo2DataUrl": {
+          "type": "string",
+          "description": "JPEG carimbado 2 (validacao) em data URL com limite de tamanho.",
+          "minLength": 0,
+          "maxLength": 380000
+        },
+        "revision": {
+          "type": "number"
+        },
+        "revisionToken": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 64
+        },
+        "baseRevisionToken": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64
+        },
+        "createdByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdByName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "updatedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedByName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 40
+        },
+        "serverUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "condominiumId",
+        "cycleId",
+        "service",
+        "tower",
+        "apartment",
+        "previousValue",
+        "hasPreviousValue",
+        "currentValue",
+        "consumption",
+        "hasConsumption",
+        "referenceSource",
+        "status",
+        "alerts",
+        "exceptionType",
+        "observation",
+        "auditCode1",
+        "auditCode2",
+        "photo1DataUrl",
+        "photo2DataUrl",
+        "revision",
+        "revisionToken",
+        "baseRevisionToken",
+        "createdByUid",
+        "createdByName",
+        "createdAt",
+        "updatedByUid",
+        "updatedByName",
+        "updatedAt",
+        "serverUpdatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/cycles/{cycleId}/settings/{docId}": {
+      "schema": {
+        "$ref": "#/entities/CycleSettings"
+      },
+      "description": "Configuracoes sincronizadas do ciclo (limites de alerta e ordens fisicas de gas)."
+    },
+    "/cycles/{cycleId}/references/{docId}": {
+      "schema": {
+        "$ref": "#/entities/TowerReference"
+      },
+      "description": "Referencias anteriores importadas por CSV agrupadas por servico e torre."
+    },
+    "/cycles/{cycleId}/readings/{docId}": {
+      "schema": {
+        "$ref": "#/entities/MeterReading"
+      },
+      "description": "Leituras de Agua e Gas sincronizadas com fotos carimbadas e controle estrito de revisao."
+    }
+  }
+}

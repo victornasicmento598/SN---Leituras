@@ -1,0 +1,6 @@
+{
+  "name": "SN - Leituras",
+  "description": "PWA mobile-first de coleta mensal de Água e Gás para o Residencial Campos do Sul, com operação offline via IndexedDB, carimbo de fotos, backup ZIP por torre, relatórios A4 P&B e sincronização incremental em dupla via Firebase.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

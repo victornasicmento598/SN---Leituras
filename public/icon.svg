@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#0A2239" />
+  <rect x="44" y="44" width="424" height="424" rx="84" fill="none" stroke="#1E3A5F" stroke-width="6" />
+  <!-- Water Droplet (Left) -->
+  <path d="M180 132C180 132 116 212 116 262C116 297.346 144.654 326 180 326C215.346 326 244 297.346 244 262C244 212 180 132 180 132Z" fill="#0D8A9E" />
+  <path d="M156 266C156 280 166 294 180 294" stroke="#E0F7FA" stroke-width="10" stroke-linecap="round" fill="none" />
+  <!-- Gas Flame (Right) -->
+  <path d="M336 126C336 126 398 188 398 252C398 292.869 367.869 326 327 326C286.131 326 256 292.869 256 252C256 226 270 202 286 186C286 206 300 218 312 218C304 184 336 126 336 126Z" fill="#E08E00" />
+  <path d="M328 232C328 232 354 256 354 278C354 293.464 341.464 306 326 306C310.536 306 298 293.464 298 278C298 256 328 232 328 232Z" fill="#FEF3C7" />
+  <!-- Meter Counter Strip -->
+  <rect x="96" y="362" width="320" height="72" rx="16" fill="#FFFFFF" />
+  <text x="256" y="411" font-family="monospace, sans-serif" font-weight="800" font-size="42" fill="#0A2239" text-anchor="middle" letter-spacing="4">SN•560</text>
+</svg>
